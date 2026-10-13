@@ -2,15 +2,63 @@
 # SPDX-License-Identifier: Apache-2.0
 # Scans tracked files for host paths, mail, deploy hostnames, and key-shaped tokens.
 # Fails closed. Does not print matched text.
+# -Root scans that directory instead of git ls-files. The default path is unchanged.
+
+param(
+    [string]$Root
+)
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
-$filesRaw = & git ls-files
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "git ls-files failed"
-    exit 1
+function Test-LeadingNul([string]$Path) {
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $buf = New-Object byte[] 512
+        $n = $stream.Read($buf, 0, 512)
+        for ($i = 0; $i -lt $n; $i++) {
+            if ($buf[$i] -eq 0) { return $true }
+        }
+        return $false
+    } finally {
+        $stream.Close()
+    }
+}
+
+$entries = New-Object System.Collections.Generic.List[object]
+if ($Root) {
+    $rootFull = $Root
+    if (-not [System.IO.Path]::IsPathRooted($rootFull)) {
+        $rootFull = Join-Path $RepoRoot $rootFull
+    }
+    if (-not (Test-Path -LiteralPath $rootFull)) {
+        Write-Output "scan-repo: FAIL missing root"
+        exit 1
+    }
+    $rootFull = (Resolve-Path -LiteralPath $rootFull).Path.TrimEnd('\')
+    $repoFull = (Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd('\')
+    $prefix = ""
+    if ($rootFull.StartsWith($repoFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $prefix = $rootFull.Substring($repoFull.Length).TrimStart('\') -replace '\\', '/'
+    }
+    Get-ChildItem -LiteralPath $rootFull -Recurse -File | ForEach-Object {
+        $inner = $_.FullName.Substring($rootFull.Length).TrimStart('\') -replace '\\', '/'
+        $rel = $inner
+        if ($prefix) { $rel = $prefix + "/" + $inner }
+        $entries.Add(@{ Rel = $rel; Full = $_.FullName; Binary = (Test-LeadingNul $_.FullName) })
+    }
+} else {
+    $filesRaw = & git ls-files
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "git ls-files failed"
+        exit 1
+    }
+    foreach ($rel in $filesRaw) {
+        if ([string]::IsNullOrWhiteSpace($rel)) { continue }
+        $full = Join-Path $RepoRoot ($rel -replace '/', '\')
+        $entries.Add(@{ Rel = $rel; Full = $full; Binary = $false })
+    }
 }
 
 # Patterns are concatenated so this script does not contain the literals it rejects.
@@ -106,16 +154,17 @@ if (Test-Path -LiteralPath $forbiddenPath) {
 }
 
 $fail = $false
-foreach ($rel in $filesRaw) {
+foreach ($entry in $entries) {
+    $rel = [string]$entry.Rel
+    $full = [string]$entry.Full
     if ([string]::IsNullOrWhiteSpace($rel)) { continue }
-    $full = Join-Path $RepoRoot ($rel -replace '/', '\')
     if (-not (Test-Path -LiteralPath $full)) { continue }
     $info = Get-Item -LiteralPath $full
     if ($info.PSIsContainer) { continue }
 
     $text = [System.IO.File]::ReadAllText($full)
     $lines = $text -split "`n"
-    $skipB64 = Test-LockOrHashFile $rel
+    $skipB64 = (Test-LockOrHashFile $rel) -or [bool]$entry.Binary
 
     for ($n = 0; $n -lt $lines.Length; $n++) {
         $line = $lines[$n]

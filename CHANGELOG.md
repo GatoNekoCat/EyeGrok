@@ -13,6 +13,8 @@ The format is Keep a Changelog. This project uses semantic versions. `0.1.0` is 
 - Headset checklist for the Frame probes in `docs/P0_RESULTS.md`.
 - Voice-first ping. Hold to talk, on-device Whisper tiny.en, transcript on screen, post to the webhook, poll the relay for up to 120 s, Check again for one more read. The typing panel is Editor and Development builds only.
 - `docs/SETUP.md` and the push-setup scripts.
+- Windows installer, QR and number-pad pairing, and the in-app checklist. Threat model in `docs/PAIRING.md`.
+- `tools/make-release.ps1` packs an existing APK into `dist/`. It does not build or publish.
 
 ### Changed
 

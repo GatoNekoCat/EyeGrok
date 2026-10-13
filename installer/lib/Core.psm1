@@ -202,28 +202,37 @@ function Install-PlatformTools {
         return "E_VERIFY"
     }
     $extract = Join-Path $dl "extract"
-    New-Item -ItemType Directory -Force -Path $extract | Out-Null
-    [void][System.Reflection.Assembly]::Load("System.IO.Compression.FileSystem, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $extract)
-    Remove-Item -LiteralPath $zip -Force
-    $adb = Join-Path $extract "platform-tools\adb.exe"
-    if (-not (Test-Path -LiteralPath $adb)) {
-        Write-InstallerLog "verify" 1 "E_VERIFY"
-        return "E_VERIFY"
+    try {
+        New-Item -ItemType Directory -Force -Path $extract | Out-Null
+        [void][System.Reflection.Assembly]::Load("System.IO.Compression.FileSystem, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $extract)
+        Remove-Item -LiteralPath $zip -Force
+        $adb = Join-Path $extract "platform-tools\adb.exe"
+        if (-not (Test-Path -LiteralPath $adb)) {
+            Write-InstallerLog "verify" 1 "E_VERIFY"
+            return "E_VERIFY"
+        }
+        $sig = Get-AuthenticodeSignature -LiteralPath $adb
+        $subject = ""
+        if ($sig.SignerCertificate) { $subject = $sig.SignerCertificate.Subject }
+        if ($sig.Status -ne "Valid" -or $subject.IndexOf("CN=Google LLC") -lt 0) {
+            Write-InstallerLog "verify" 1 "E_VERIFY"
+            return "E_VERIFY"
+        }
+        $dest = Join-Path $egHome "platform-tools"
+        if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $egHome | Out-Null
+        [System.IO.Directory]::Move((Join-Path $extract "platform-tools"), $dest)
+        Write-InstallerLog "tools" 0 ""
+        return "OK"
+    } finally {
+        try {
+            if (Test-Path -LiteralPath $extract) {
+                Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+        }
     }
-    $sig = Get-AuthenticodeSignature -LiteralPath $adb
-    $subject = ""
-    if ($sig.SignerCertificate) { $subject = $sig.SignerCertificate.Subject }
-    if ($sig.Status -ne "Valid" -or $subject.IndexOf("CN=Google LLC") -lt 0) {
-        Write-InstallerLog "verify" 1 "E_VERIFY"
-        return "E_VERIFY"
-    }
-    $dest = Join-Path $egHome "platform-tools"
-    if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
-    New-Item -ItemType Directory -Force -Path $egHome | Out-Null
-    [System.IO.Directory]::Move((Join-Path $extract "platform-tools"), $dest)
-    Write-InstallerLog "tools" 0 ""
-    return "OK"
 }
 
 function Get-FrameState {

@@ -25,6 +25,18 @@ Each decision below is provisional, pending headset results.
 | D-3 | Debug signing | No release keystore in this build. `SIGNING=debug`. |
 | D-4 | TTS deferred | Reply text only. Lepton has no Android TTS engine (P0-d logs the engine count to confirm). Piper, piper.unity, and espeak-ng are GPL-3.0 and stay out of the Apache-2.0 APK. sherpa-onnx license, size, and Unity ARM64 integration are UNVERIFIED. |
 | D-5 | CAMERA off in the app | The app does not request CAMERA until BL-2 is PASS. The probe-cam APK requests it. Default `-Qr off`. |
+| D-6 | Separate PAIR_KEY | Optional relay secret, at least 32 characters, different from the write key and the read key. Pairing off returns 503 and leaves `/health` and `/reply` working. |
+| D-7 | Ciphertext only | The relay stores the box. AES-256-CBC and HMAC-SHA256, encrypt-then-MAC. `AesGcm` is not in Windows PowerShell 5.1 or this Unity profile. |
+| D-8 | QR payload | `EG1`, relay URL, 16-byte id, 32-byte secret. HKDF-SHA256 labels `enc` and `mac`. |
+| D-9 | Number-pad code | 10 random digits plus one Damm check digit. PBKDF2-HMAC-SHA256, 100,000 iterations, salt `eyegrok-pair-v1`. The id is stretched too. |
+| D-10 | Relay URL bootstrap | The code carries no URL. A first headset gets only the URL in `eyegrok-pair-origin.txt` over adb stdin. The app reads it, deletes it, and keeps it in memory. |
+| D-11 | TTL 300 s | `PAIR_TTL_SECONDS` is clamped to 60 through 300. Single use is best effort because KV has no transactions. |
+| D-12 | Visibility retry | A 404 retries up to 6 times, 5 s apart. Reads only. |
+| D-13 | Miss limiter | More than 10 misses from one address in 60 s returns 429. In memory. The Workers Rate Limiting binding is not used. |
+| D-14 | USB push on stdin | Setup JSON goes to adb stdin. No host file on that path. If both stdin paths fail, a temp file is wiped in `finally` and the log is `b3 code=0 key=tempfile`. |
+| D-15 | Nayuki QR port | `installer/lib/QrEncoder.ps1`. MIT. Byte mode, ECC M, versions 1 through 20. |
+| D-16 | ZXing fetched | ZXing.Net 0.16.11 via `tools/fetch-zxing.ps1`. Not vendored. Apache-2.0. |
+| D-17 | platform-tools at runtime | Download only after Accept. Zip SHA-1 from `repository2-3.xml` for 37.0.1 windows, then Authenticode Valid with `CN=Google LLC`. Not redistributed. Terms URL is the platform-tools release page pinned in `installer/lib/Core.psm1`. |
 
 Slice 3 may start with these rows recorded. Headset runs can still change D-1 and D-2.
 
@@ -37,7 +49,8 @@ Host paths are not listed. Sizes are bytes.
 | P0-b empty | 35357303 | Slice 1. |
 | P0-c XR probe | 70726490 | `libopenxr_loader.so` and `libUnityOpenXR.so` present. Permissions: INTERNET, RECORD_AUDIO, `org.khronos.openxr.permission.OPENXR`, `org.khronos.openxr.permission.OPENXR_SYSTEM`. allowBackup false. usesCleartextTraffic false. Activity entry. arm64-v8a. sdk 30. target 36. |
 | P0-d flat probe | 68296869 | No `libopenxr_loader.so`. Permissions are exactly INTERNET and RECORD_AUDIO. allowBackup false. usesCleartextTraffic false. Activity entry. arm64-v8a. sdk 30. target 36. |
-| App | 68363125 | Flat ping scene. No OpenXR loader. Permissions are exactly INTERNET and RECORD_AUDIO. `EyeGrokProbe`, `EyeGrokCamProbe`, and ZXing are not in the dex. `EyeGrokKeystore` is. Model bytes 32166155. SIGNING=debug. Development player off. EditMode tests 19 passed, 0 failed. |
+| App | 68363125 | Flat ping scene. No OpenXR loader. Permissions are exactly INTERNET and RECORD_AUDIO. Built with `-Qr off`. `EyeGrokProbe`, `EyeGrokCamProbe`, and ZXing are not in the dex. `EyeGrokKeystore` is. Model bytes 32166155. SIGNING=debug. Development player off. EditMode tests 19 passed, 0 failed. |
+| Camera probe | 69086397 | `probe-cam`. Permissions are exactly INTERNET, RECORD_AUDIO, and CAMERA. Headset not run. |
 
 Whisper model `ggml-tiny.en-q5_1.bin` SHA-256 `c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b`, 32166155 bytes. The hash is the Hugging Face LFS oid. whisper.unity commit `e951e4a4c6e44c781b1d36bb8dc5bf1b7bae9687` (tag 1.4.0).
 
@@ -87,11 +100,11 @@ PASS when all of these are true:
 
 ### Ping
 
-Install the app APK with `adb install -r`, launch it once so the external files directory exists, then run `tools/push-setup.ps1` or `tools/push-setup.sh` with a setup file that lives outside the repo. The script prints `IMPORTED` or `NOT_IMPORTED`. It does not print the file. Delete the local file after import.
+The five-step release check is `docs/TESTING.md`. This section is the older push-setup path. Install the app APK with `adb install -r`, launch it once so the external files directory exists, then run `tools/push-setup.ps1` or `tools/push-setup.sh` with a setup file that lives outside the repo. The script prints `IMPORTED` or `NOT_IMPORTED`. It does not print the file. Delete the local file after import.
 
 Expected screen states, pointer or controller only:
 
-1. Before setup: status `Unconfigured`, setup line `Not set up — see docs/SETUP.md`.
+1. Before setup: status `Unconfigured`, setup line `Not set up — tap Pair`.
 2. After import: setup line `Configured`, status `Idle — Hold to talk`. While the model loads, the status can read `Loading voice model…`.
 3. Hold the large Hold to talk button. Status `Recording — Release to send`. Releasing outside the button counts as release. Under half a second returns to Idle with `Too short`.
 4. After release: `Transcribing`, then `Sending`, then `AwaitingReply — Waiting for reply`. The transcript line shows the words. Logs show `stt len=` and `nonce=` (6 hex chars), never the words.

@@ -339,3 +339,7 @@ Software.
 ## ZXing.Net 0.16.11
 
 Not vendored. `tools/fetch-zxing.ps1` downloads the NuGet package and extracts `lib/netstandard2.0/zxing.dll` into a gitignored plugin folder. The package license expression is Apache-2.0. EyeGrok's `LICENSE` is the same license. The build fails if the pinned SHA-256 does not match.
+
+## Android SDK Platform-Tools
+
+Not redistributed. EyeGrok does not ship `adb`. The Windows installer downloads platform-tools only after Accept, checks the zip SHA-1 pinned in `installer/lib/Core.psm1`, and requires `adb.exe` to have a valid Authenticode signature from Google. The terms page shown before download is the platform-tools release page, also pinned in that file. The SHA-1 comment cites Google's `repository2-3.xml` entry for platform-tools 37.0.1 on Windows.
