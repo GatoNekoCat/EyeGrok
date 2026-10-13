@@ -1,6 +1,6 @@
 # Copyright 2026 EyeGrok contributors
 # SPDX-License-Identifier: Apache-2.0
-# Installer logic for Windows PowerShell 5.1. No UI. No setup values in arguments or the log.
+# Installer logic for Windows PowerShell 5.1. No UI. No setup values or headset addresses in the log.
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -37,6 +37,20 @@ function Get-EyeGrokErrorText {
     }
     if ($Key -eq "E_NO_LEPTON") {
         return "The Frame is connected, but Lepton Development is not running. Start Lepton Development from the Steam Library on the Frame, then click Retry."
+    }
+    if ($Key -eq "E_WIFI_NOHOST") {
+        $name = "frame"
+        if ($Detail -and (Test-SafeFrameHost $Detail) -and -not (Test-IPv4Literal $Detail)) { $name = $Detail }
+        return "This PC cannot find a headset named " + $name + ". On the Frame, open Quick Settings, click your Wi-Fi network, and enter the IP address shown there. Steam Settings, then Internet, shows the same address, for example 192.168.4.80. Make sure no two devices share the hostname " + $name + "."
+    }
+    if ($Key -eq "E_LEPTON_NOT_RUNNING") {
+        return "The Frame refused the Wi-Fi connection. Start Lepton Development from the Steam Library on the Frame, or any Android game from Steam, then click Retry."
+    }
+    if ($Key -eq "E_WIFI_UNREACHABLE") {
+        return "The headset did not answer over Wi-Fi. Put this PC and the Frame on the same network, and turn off client isolation on the router. Or use USB instead. Make sure no two devices share the hostname frame."
+    }
+    if ($Key -eq "E_BAD_IP") {
+        return "That is not an IPv4 address. Enter four numbers from 0 to 255, separated by dots."
     }
     if ($Key -eq "E_INSTALL") {
         $code = "UNKNOWN"
@@ -235,6 +249,125 @@ function Install-PlatformTools {
     }
 }
 
+function Get-FrameSerial {
+    if ($script:FrameSerial) { return $script:FrameSerial }
+    return "localhost:5555"
+}
+
+function Test-IPv4Literal {
+    param([string]$Text)
+    if (-not $Text) { return $false }
+    $parts = $Text.Split(".")
+    if ($parts.Length -ne 4) { return $false }
+    foreach ($part in $parts) {
+        if ($part.Length -lt 1 -or $part.Length -gt 3) { return $false }
+        foreach ($ch in $part.ToCharArray()) {
+            $code = [int]$ch
+            if ($code -lt 48 -or $code -gt 57) { return $false }
+        }
+        if ([int]$part -gt 255) { return $false }
+    }
+    return $true
+}
+
+function Test-SafeFrameHost {
+    param([string]$Name)
+    if (-not $Name) { return $false }
+    if ($Name.Length -gt 253) { return $false }
+    if ($Name -notmatch '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$') { return $false }
+    if ($Name.Contains("..")) { return $false }
+    return $true
+}
+
+function Get-WifiFailureKey {
+    param([string]$Text)
+    if (-not $Text) { return $null }
+    $lower = $Text.ToLowerInvariant()
+    if ($lower.Contains("cannot resolve host") -or $lower.Contains("11001")) { return "E_WIFI_NOHOST" }
+    if ($lower.Contains("10061") -or $lower.Contains("connection refused") -or $lower.Contains("actively refused")) { return "E_LEPTON_NOT_RUNNING" }
+    if ($lower.Contains("10060") -or $lower.Contains("timed out") -or $lower.Contains("unreachable")) { return "E_WIFI_UNREACHABLE" }
+    return $null
+}
+
+function Test-FrameDevice {
+    param([string]$Serial)
+    if (-not $Serial) { return $false }
+    $result = Invoke-Adb -ArgumentList @("devices")
+    foreach ($line in ([string]$result.Stdout -split "`n")) {
+        $text = $line.Trim()
+        if ($text.Length -le $Serial.Length) { continue }
+        if (-not $text.StartsWith($Serial)) { continue }
+        $next = $text.Substring($Serial.Length, 1)
+        if ($next -ne " " -and $next -ne "`t") { continue }
+        if ($text -match "\sdevice(\s|$)") { return $true }
+    }
+    return $false
+}
+
+function Invoke-WifiConnect {
+    param([string]$Endpoint)
+    $result = Invoke-Adb -ArgumentList @("connect", $Endpoint)
+    $text = [string]$result.Stdout
+    if ($result.Stderr) { $text = $text + "`n" + [string]$result.Stderr }
+    $lower = ""
+    if ($text) { $lower = $text.ToLowerInvariant() }
+    $key = Get-WifiFailureKey $text
+    $said = $false
+    if ($lower.Contains("connected to ")) { $said = $true }
+    if ($said -and (Test-FrameDevice -Serial $Endpoint)) {
+        $script:FrameSerial = $Endpoint
+        return @{ Ok = $true; Key = $null; Signed = $false }
+    }
+    if ($key) { return @{ Ok = $false; Key = $key; Signed = $true } }
+    if ($said) { return @{ Ok = $false; Key = "E_NO_FRAME"; Signed = $true } }
+    return @{ Ok = $false; Key = $null; Signed = $false }
+}
+
+function Resolve-FrameLink {
+    param(
+        [string]$HostName,
+        [string]$IpAddress,
+        [switch]$UseUsb,
+        [switch]$IpOnly
+    )
+    if ($UseUsb) {
+        $state = Connect-Lepton
+        if ($state -eq "Ready") { return @{ Ok = $true; Key = $null; Signed = $false } }
+        $key = "E_NO_FRAME"
+        if ($state -eq "Unauthorized") { $key = "E_UNAUTHORIZED" }
+        if ($state -eq "UsbOnly") { $key = "E_NO_LEPTON" }
+        return @{ Ok = $false; Key = $key; Signed = $false }
+    }
+    if ($IpOnly) {
+        $ip = ""
+        if ($IpAddress) { $ip = $IpAddress.Trim() }
+        if (-not (Test-IPv4Literal $ip)) { return @{ Ok = $false; Key = "E_BAD_IP"; Signed = $true } }
+        return (Invoke-WifiConnect -Endpoint ($ip + ":5555"))
+    }
+    $name = "frame"
+    if ($HostName -and $HostName.Trim().Length -gt 0) { $name = $HostName.Trim() }
+    if (-not (Test-SafeFrameHost $name)) {
+        return @{ Ok = $false; Key = "E_WIFI_NOHOST"; Signed = $true }
+    }
+    $wifi = Invoke-WifiConnect -Endpoint ($name + ":5555")
+    if ($wifi.Ok) { return $wifi }
+    if ($IpAddress -and $IpAddress.Trim().Length -gt 0) {
+        $ip = $IpAddress.Trim()
+        if (-not (Test-IPv4Literal $ip)) { return @{ Ok = $false; Key = "E_BAD_IP"; Signed = $true } }
+        return (Invoke-WifiConnect -Endpoint ($ip + ":5555"))
+    }
+    if ($wifi.Signed) { return $wifi }
+    $state = Get-FrameState
+    if ($state -eq "UsbOnly") { $state = Connect-Lepton }
+    if ($state -eq "Ready") {
+        $script:FrameSerial = "localhost:5555"
+        return @{ Ok = $true; Key = $null; Signed = $false }
+    }
+    if ($state -eq "Unauthorized") { return @{ Ok = $false; Key = "E_UNAUTHORIZED"; Signed = $false } }
+    if ($state -eq "UsbOnly") { return @{ Ok = $false; Key = "E_NO_LEPTON"; Signed = $false } }
+    return @{ Ok = $false; Key = "E_NO_FRAME"; Signed = $false }
+}
+
 function Get-FrameState {
     $result = Invoke-Adb -ArgumentList @("devices", "-l")
     $ready = $false
@@ -259,10 +392,15 @@ function Connect-Lepton {
     Invoke-Adb -ArgumentList @("connect", "localhost:5555") | Out-Null
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
-        if ((Get-FrameState) -eq "Ready") { return "Ready" }
+        if ((Get-FrameState) -eq "Ready") {
+            $script:FrameSerial = "localhost:5555"
+            return "Ready"
+        }
         Start-Sleep -Milliseconds 400
     } while ([DateTime]::UtcNow -lt $deadline)
-    return (Get-FrameState)
+    $state = Get-FrameState
+    if ($state -eq "Ready") { $script:FrameSerial = "localhost:5555" }
+    return $state
 }
 
 function Find-NewestApk {
@@ -276,7 +414,8 @@ function Find-NewestApk {
 
 function Install-EyeGrokApk {
     param([Parameter(Mandatory = $true)][string]$ApkPath)
-    $result = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "install", "-r", $ApkPath)
+    $serial = Get-FrameSerial
+    $result = Invoke-Adb -ArgumentList @("-s", $serial, "install", "-r", $ApkPath)
     $text = $result.Stdout + "`n" + $result.Stderr
     if ($result.Code -eq 0 -and $text -match "Success") {
         Write-InstallerLog "install" 0 ""
@@ -404,14 +543,15 @@ function Send-StreamOverAdb {
     param([string]$RemotePath, [byte[]]$Bytes)
     $part = $RemotePath + ".part"
     $command = "cat > " + $part + " && mv " + $part + " " + $RemotePath
-    $exec = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "exec-in", $command) -StdinBytes $Bytes
+    $serial = Get-FrameSerial
+    $exec = Invoke-Adb -ArgumentList @("-s", $serial, "exec-in", $command) -StdinBytes $Bytes
     if ($exec.Code -eq 0) { return @{ Path = "exec-in"; Result = $exec } }
-    $shell = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "shell", $command) -StdinBytes $Bytes
+    $shell = Invoke-Adb -ArgumentList @("-s", $serial, "shell", $command) -StdinBytes $Bytes
     if ($shell.Code -eq 0) { return @{ Path = "shell"; Result = $shell } }
     $temp = Write-B3TempFile $Bytes
     Write-InstallerLog "b3" 0 "tempfile"
     try {
-        $pushed = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "push", $temp, $RemotePath)
+        $pushed = Invoke-Adb -ArgumentList @("-s", $serial, "push", $temp, $RemotePath)
         return @{ Path = "tempfile"; Result = $pushed }
     } finally {
         Clear-B3TempFile $temp
@@ -461,8 +601,9 @@ function Send-SetupOverAdb {
     $bytes = New-Object System.Text.UTF8Encoding $false
     $sent = Send-StreamOverAdb -RemotePath $remote -Bytes ($bytes.GetBytes($Json))
     $imported = $false
+    $serial = Get-FrameSerial
     for ($i = 0; $i -lt 20; $i++) {
-        $listing = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "shell", "ls", $remote)
+        $listing = Invoke-Adb -ArgumentList @("-s", $serial, "shell", "ls", $remote)
         $out = $listing.Stdout
         if ($listing.Code -ne 0 -or $out -notmatch "eyegrok-setup.json") {
             $imported = $true
@@ -536,6 +677,8 @@ Export-ModuleMember -Function @(
     "Invoke-Adb",
     "Install-PlatformTools",
     "Get-FrameState",
+    "Get-FrameSerial",
+    "Resolve-FrameLink",
     "Connect-Lepton",
     "Find-NewestApk",
     "Install-EyeGrokApk",

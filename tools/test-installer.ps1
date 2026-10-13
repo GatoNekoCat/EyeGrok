@@ -384,6 +384,80 @@ foreach ($case in $cases) {
     }
 }
 
+function Get-CallLog([string]$WorkHome) {
+    $path = Join-Path $WorkHome "fake-adb-calls.txt"
+    if (-not (Test-Path -LiteralPath $path)) { return "" }
+    return [System.IO.File]::ReadAllText($path)
+}
+
+$wifiCases = @(
+    @{ Id = "AT-W1"; Name = "wifihappy"; Extra = @(); Stdin = $null; Ip = $null; Ok = $true },
+    @{ Id = "AT-W2"; Name = "wifinohost"; Extra = @("-FramePrompt"); Stdin = "192.168.4.80"; Ip = "192.168.4.80"; Ok = $true },
+    @{ Id = "AT-W3"; Name = "wifirefused"; Extra = @(); Stdin = $null; Ip = $null; Ok = $false; Key = "E_LEPTON_NOT_RUNNING"; Text = "Lepton Development from the Steam Library" },
+    @{ Id = "AT-W4"; Name = "wifitimeout"; Extra = @(); Stdin = $null; Ip = $null; Ok = $false; Key = "E_WIFI_UNREACHABLE"; Text = "client isolation" },
+    @{ Id = "AT-W5"; Name = "wifinohost"; Extra = @("-FramePrompt"); Stdin = "10.0.0.256"; Ip = "10.0.0.256"; Ok = $false; Key = "E_BAD_IP"; Text = "not an IPv4" },
+    @{ Id = "AT-W6"; Name = "happy"; Extra = @("-FrameUsb"); Stdin = $null; Ip = $null; Ok = $true }
+)
+foreach ($case in $wifiCases) {
+    $caseHome = New-WorkHome $case.Id
+    try {
+        $setupArgs = @("-Headless", "-Mode", "frame") + $case.Extra
+        $run = Invoke-SetupChild -EgHome $caseHome -PathValue $filtered -Adb $Fake -Scenario $case.Name -Arguments $setupArgs -Stdin $case.Stdin
+        $needles = @()
+        if ($case.Ip) { $needles = @([string]$case.Ip) }
+        Save-Proof ($case.Id + ".txt") ($run.Stdout + "`n" + $run.Stderr) $needles
+        $calls = Get-CallLog $caseHome
+        $logPath = Join-Path $caseHome "logs\installer.log"
+        $logged = ""
+        if (Test-Path -LiteralPath $logPath) { $logged = [System.IO.File]::ReadAllText($logPath) }
+        if ($case.Ip) {
+            if ($run.Stdout.IndexOf([string]$case.Ip) -ge 0) { throw "stdout ip" }
+            if ($run.Stderr.IndexOf([string]$case.Ip) -ge 0) { throw "stderr ip" }
+            if ($logged.IndexOf([string]$case.Ip) -ge 0) { throw "log ip" }
+        }
+        if ($case.Id -eq "AT-W1") {
+            if ($calls.IndexOf("connect frame:5555") -lt 0) { throw "connect frame" }
+            if ($calls.IndexOf("devices") -lt 0) { throw "devices" }
+            if ($calls.IndexOf("forward tcp:5555") -ge 0) { throw "usb on wifi" }
+        }
+        if ($case.Id -eq "AT-W2") {
+            if ($run.Stdout.IndexOf("PROMPT ip") -lt 0) { throw "prompt" }
+            $hostAt = $calls.IndexOf("connect frame:5555")
+            $ipAt = $calls.IndexOf("connect 192.168.4.80:5555")
+            if ($hostAt -lt 0 -or $ipAt -lt 0 -or $ipAt -le $hostAt) { throw "connect order" }
+            if ($calls.IndexOf("`ndevices") -lt 0 -and $calls.IndexOf("devices") -lt 0) { throw "devices" }
+        }
+        if ($case.Id -eq "AT-W4") {
+            if ($run.Stdout.IndexOf("hostname frame") -lt 0) { throw "duplicate hostname" }
+        }
+        if ($case.Id -eq "AT-W5") {
+            if ($run.Stdout.IndexOf("PROMPT ip") -lt 0) { throw "prompt" }
+            if ($calls.IndexOf("10.0.0.256") -ge 0) { throw "bad ip was dialed" }
+            if ($calls.IndexOf("connect frame:5555") -lt 0) { throw "connect frame" }
+        }
+        if ($case.Id -eq "AT-W6") {
+            if ($calls.IndexOf("forward tcp:5555 tcp:5555") -lt 0) { throw "forward" }
+            if ($calls.IndexOf("connect localhost:5555") -lt 0) { throw "usb connect" }
+        }
+        if ($case.Ok) {
+            if ($run.Code -ne 0) { throw "exit" }
+            if ($run.Stdout.IndexOf("`nOK") -lt 0 -and -not $run.Stdout.TrimEnd().EndsWith("OK")) { throw "ok" }
+        } else {
+            if ($run.Code -eq 0) { throw "exit 0" }
+            Assert-Contains $run.Stdout ([string]$case.Key) "key"
+            Assert-Contains $run.Stdout ([string]$case.Text) "text"
+        }
+        [void]$notes.Add($case.Id + " PASS")
+    } catch {
+        $fail = 1
+        $msg = [string]$_.Exception.Message
+        if ($case.Ip) { $msg = $msg.Replace([string]$case.Ip, "[REDACTED]") }
+        [void]$notes.Add($case.Id + " FAIL " + $msg)
+    } finally {
+        Remove-WorkHome $caseHome
+    }
+}
+
 $scripts = @(
     "installer\EyeGrok-Setup.ps1",
     "installer\lib\Core.psm1",
@@ -451,7 +525,11 @@ if ($deviceSkip) {
         Save-Proof "i1-fresh.txt" ($run.Stdout + "`n" + $run.Stderr) $null
         $adbExe = Join-Path $fresh "platform-tools\adb.exe"
         if (-not (Test-Path -LiteralPath $adbExe)) { throw "adb missing" }
-        if ($run.Stdout.IndexOf("E_NO_FRAME") -lt 0) { throw "expected E_NO_FRAME" }
+        $frameHit = $false
+        foreach ($token in @("E_NO_FRAME", "E_WIFI_NOHOST", "E_WIFI_UNREACHABLE", "E_LEPTON_NOT_RUNNING")) {
+            if ($run.Stdout.IndexOf($token) -ge 0) { $frameHit = $true }
+        }
+        if (-not $frameHit) { throw "expected frame error" }
         if ($run.Code -eq 0) { throw "fresh exit 0" }
         Invoke-Silent -File $adbExe -Arguments "kill-server"
         [void]$notes.Add("AT-I1 PASS")

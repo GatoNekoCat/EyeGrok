@@ -6,8 +6,8 @@ Before you start: your relay (with PAIR_KEY) and Bot webhook, see docs/RELAY.md.
 
 1. Turn on Developer Mode on the Frame.
 2. Start Lepton Development from the Steam Library on the Frame.
-3. Plug the Frame into the PC with USB.
-4. Double-click `EyeGrok-Setup.cmd` and follow it.
+3. Put the Frame and this PC on the same Wi-Fi.
+4. Double-click `EyeGrok-Setup.cmd` and follow it. The Frame step runs `adb connect frame:5555`. If you renamed the headset, type that name. If the PC cannot resolve the name, enter the IP from Quick Settings (click your Wi-Fi network) or from Steam Settings, then Internet.
 5. In EyeGrok, scan the QR or enter the code, then hold to talk.
 
 The installer downloads Android platform-tools only after you click Accept and download. Nothing is fetched before that. adb is stored under the EyeGrok folder in Local AppData.
@@ -20,7 +20,11 @@ Hold `Hold to talk`, speak a short English question, and release. A reply can ta
 
 | What you see | What to do |
 |---|---|
-| No Frame found. Check the USB cable, turn on Developer Mode, and start Lepton Development from the Steam Library on the Frame. Then click Retry. | Check the cable, Developer Mode, and Lepton, then click Retry. |
+| No Frame found. Check the USB cable, turn on Developer Mode, and start Lepton Development from the Steam Library on the Frame. Then click Retry. | Check the cable, Developer Mode, and Lepton, then click Retry. A PC USB port may not power the headset. Use a powered cable or adapter. |
+| This PC cannot find a headset named frame. On the Frame, open Quick Settings, click your Wi-Fi network, and enter the IP address shown there. Steam Settings, then Internet, shows the same address, for example 192.168.4.80. Make sure no two devices share the hostname frame. | Enter that IP, or type the headset name if you changed it. Make sure only one device is named frame. |
+| The Frame refused the Wi-Fi connection. Start Lepton Development from the Steam Library on the Frame, or any Android game from Steam, then click Retry. | Start Lepton Development from the Steam Library on the Frame, then click Retry. |
+| The headset did not answer over Wi-Fi. Put this PC and the Frame on the same network, and turn off client isolation on the router. Or use USB instead. Make sure no two devices share the hostname frame. | Same network, client isolation off, or Use USB instead. Make sure only one device is named frame. |
+| That is not an IPv4 address. Enter four numbers from 0 to 255, separated by dots. | Enter four numbers from 0 to 255, separated by dots. |
 | The Frame is connected but has not allowed this PC. Put on the headset, allow USB debugging, then click Retry. | Allow USB debugging on the Frame, then click Retry. Whether the Frame shows that prompt is UNVERIFIED. |
 | The Frame is connected, but Lepton Development is not running. Start Lepton Development from the Steam Library on the Frame, then click Retry. | Start Lepton Development from the Steam library on the Frame. |
 | EyeGrok did not install (INSUFFICIENT_STORAGE). Free some space on the Frame. | Free some space, then install again. |
@@ -33,6 +37,8 @@ Hold `Hold to talk`, speak a short English question, and release. A reply can ta
 | The downloaded platform-tools did not pass the signature check. Nothing was run. | Nothing from that download was started. Click Retry, or put `adb` on PATH yourself. |
 | Accept the Android SDK Platform-Tools terms before download. | Click Accept and download. |
 | Windows blocks `EyeGrok-Setup.cmd` or `EyeGrok-Setup.ps1`. | Right-click the file, open Properties, and check Unblock. Then run it again. |
+
+Wi-Fi is the first try. If it fails, enter the headset IP, or click Use USB instead. USB runs `adb forward tcp:5555 tcp:5555`, then `adb connect localhost:5555`. A PC USB port may not power the headset. Use a powered cable or adapter.
 
 ## Advanced
 

@@ -48,6 +48,15 @@ if ($joined -match "(^| )devices( |$)") {
     } elseif ($scenario -eq "nolepton") {
         Write-Output "R3A6 device product:frame model:Frame device:frame"
     } elseif ($scenario -eq "nodevice") {
+    } elseif ($scenario -eq "wifihappy") {
+        Write-Output "frame:5555 device product:frame model:Frame device:frame"
+    } elseif ($scenario -eq "wifinohost") {
+        $prior = ""
+        if (Test-Path -LiteralPath $log) { $prior = [System.IO.File]::ReadAllText($log) }
+        if ($prior.Contains("connect 192.168.4.80:5555")) {
+            Write-Output "192.168.4.80:5555 device product:frame model:Frame device:frame"
+        }
+    } elseif ($scenario -eq "wifirefused" -or $scenario -eq "wifitimeout") {
     } else {
         Write-Output "localhost:5555 device product:frame model:Frame device:frame"
     }
@@ -70,6 +79,32 @@ if ($joined -match "(^| )ls( |$)") {
         exit 1
     }
     Write-Output "/sdcard/Android/data/io.github.eyegrok.ping/files/eyegrok-setup.json"
+    exit 0
+}
+
+if ($joined -match "(^| )connect( |$)") {
+    $target = ""
+    if ($args.Count -gt 0) { $target = [string]$args[$args.Count - 1] }
+    if ($scenario -eq "wifihappy" -and $target -eq "frame:5555") {
+        Write-Output "connected to frame:5555"
+        exit 0
+    }
+    if ($scenario -eq "wifinohost" -and $target -eq "frame:5555") {
+        Write-Output "cannot resolve host 'frame' and port 5555: No such host is known. (11001)"
+        exit 1
+    }
+    if ($scenario -eq "wifinohost" -and $target -eq "192.168.4.80:5555") {
+        Write-Output "connected to 192.168.4.80:5555"
+        exit 0
+    }
+    if ($scenario -eq "wifirefused") {
+        Write-Output ("cannot connect to " + $target + ": No connection could be made because the target machine actively refused it. (10061)")
+        exit 1
+    }
+    if ($scenario -eq "wifitimeout") {
+        Write-Output ("cannot connect to " + $target + ": A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond. (10060)")
+        exit 1
+    }
     exit 0
 }
 

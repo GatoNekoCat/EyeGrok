@@ -13,7 +13,10 @@ param(
     [string]$Mode = "frame",
     [ValidateSet("qr", "code", "usb", "all")]
     [string]$PairMode = "usb",
-    [string]$ApkPath
+    [string]$ApkPath,
+    [string]$FrameHost,
+    [switch]$FramePrompt,
+    [switch]$FrameUsb
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,20 +47,6 @@ function Clear-LivePairing {
     $script:LiveIds.Clear()
     $script:LiveRelay = $null
     $script:LiveKey = $null
-}
-
-function Get-FrameErrorKey {
-    param([string]$State)
-    if ($State -eq "Ready") { return $null }
-    if ($State -eq "Unauthorized") { return "E_UNAUTHORIZED" }
-    if ($State -eq "UsbOnly") { return "E_NO_LEPTON" }
-    return "E_NO_FRAME"
-}
-
-function Resolve-FrameState {
-    $state = Get-FrameState
-    if ($state -eq "UsbOnly") { $state = Connect-Lepton }
-    return $state
 }
 
 function Find-InstallerApk {
@@ -125,12 +114,28 @@ function Invoke-Headless {
     Write-InstallerLog "tools" 0 ""
 
     Write-Output "STEP frame"
-    $state = Resolve-FrameState
-    $frameKey = Get-FrameErrorKey $state
-    if ($frameKey) {
+    if ($FrameUsb) {
+        $link = Resolve-FrameLink -UseUsb
+    } else {
+        $link = Resolve-FrameLink -HostName $FrameHost
+        if (-not $link.Ok -and $link.Signed -and $FramePrompt) {
+            Write-Output "PROMPT ip"
+            $answer = [Console]::In.ReadLine()
+            if ($null -eq $answer) { $answer = "" }
+            $answer = $answer.Trim()
+            if ($answer.Length -gt 0) {
+                $link = Resolve-FrameLink -IpAddress $answer -IpOnly
+            }
+        }
+    }
+    if (-not $link.Ok) {
+        $frameKey = "E_NO_FRAME"
+        if ($link.Key) { $frameKey = [string]$link.Key }
         Write-InstallerLog "frame" 2 $frameKey
         Write-Output $frameKey
-        Write-Output (Get-EyeGrokErrorText -Key $frameKey)
+        $detail = $null
+        if ($frameKey -eq "E_WIFI_NOHOST") { $detail = $FrameHost }
+        Write-Output (Get-EyeGrokErrorText -Key $frameKey -Detail $detail)
         Stop-Headless 2
         return
     }
@@ -422,6 +427,22 @@ function Show-Tools {
     $next.Add_Click({ Show-Frame })
 }
 
+function Show-FrameOutcome {
+    param($Link)
+    if ($Link.Ok) {
+        if ($script:FramePromptPanel) { $script:FramePromptPanel.Visible = $false }
+        Set-Status "Frame is ready."
+        return
+    }
+    if ($script:FramePromptPanel) { $script:FramePromptPanel.Visible = $true }
+    $key = "E_NO_FRAME"
+    if ($Link.Key) { $key = [string]$Link.Key }
+    $detail = $null
+    if ($key -eq "E_WIFI_NOHOST" -and $script:FrameHostBox) { $detail = $script:FrameHostBox.Text.Trim() }
+    Set-Status (Get-EyeGrokErrorText -Key $key -Detail $detail)
+    if ($script:FrameIpBox) { $script:FrameIpBox.Focus() }
+}
+
 function Show-Frame {
     $content.Controls.Clear()
     $steps.SelectedIndex = 1
@@ -433,17 +454,65 @@ function Show-Frame {
     $next.Text = "Next"
     $next.Location = New-Object System.Drawing.Point 140, 8
     $next.Size = New-Object System.Drawing.Size 120, 32
+    $hostLabel = New-Object System.Windows.Forms.Label
+    $hostLabel.Text = "Headset name"
+    $hostLabel.Location = New-Object System.Drawing.Point 8, 52
+    $hostLabel.Size = New-Object System.Drawing.Size 140, 24
+    $hostBox = New-Object System.Windows.Forms.TextBox
+    $hostBox.Text = "frame"
+    $hostBox.Location = New-Object System.Drawing.Point 152, 48
+    $hostBox.Size = New-Object System.Drawing.Size 280, 24
+    $hostBox.MaxLength = 253
+    $script:FrameHostBox = $hostBox
     $content.Controls.Add($retry)
     $content.Controls.Add($next)
+    $content.Controls.Add($hostLabel)
+    $content.Controls.Add($hostBox)
+
+    $panel = New-Object System.Windows.Forms.Panel
+    $panel.Location = New-Object System.Drawing.Point 8, 88
+    $panel.Size = New-Object System.Drawing.Size 720, 220
+    $panel.Visible = $false
+    $script:FramePromptPanel = $panel
+    $hint = New-Object System.Windows.Forms.Label
+    $hint.Text = "On the Frame, open Quick Settings, click your Wi-Fi network, and read the IP address. Steam Settings, then Internet, shows the same address, for example 192.168.4.80."
+    $hint.Location = New-Object System.Drawing.Point 0, 0
+    $hint.Size = New-Object System.Drawing.Size 700, 48
+    $ipLabel = New-Object System.Windows.Forms.Label
+    $ipLabel.Text = "Headset IP"
+    $ipLabel.Location = New-Object System.Drawing.Point 0, 56
+    $ipLabel.Size = New-Object System.Drawing.Size 140, 24
+    $ipBox = New-Object System.Windows.Forms.TextBox
+    $ipBox.Location = New-Object System.Drawing.Point 144, 52
+    $ipBox.Size = New-Object System.Drawing.Size 280, 24
+    $ipBox.MaxLength = 15
+    $script:FrameIpBox = $ipBox
+    $connect = New-Object System.Windows.Forms.Button
+    $connect.Text = "Connect"
+    $connect.Location = New-Object System.Drawing.Point 0, 92
+    $connect.Size = New-Object System.Drawing.Size 120, 32
+    $usb = New-Object System.Windows.Forms.Button
+    $usb.Text = "Use USB instead"
+    $usb.Location = New-Object System.Drawing.Point 132, 92
+    $usb.Size = New-Object System.Drawing.Size 160, 32
+    $panel.Controls.Add($hint)
+    $panel.Controls.Add($ipLabel)
+    $panel.Controls.Add($ipBox)
+    $panel.Controls.Add($connect)
+    $panel.Controls.Add($usb)
+    $content.Controls.Add($panel)
+
     $retry.Add_Click({
-        $state = Resolve-FrameState
-        $key = Get-FrameErrorKey $state
-        if ($key) { Set-Status (Get-EyeGrokErrorText -Key $key) } else { Set-Status "Frame is ready." }
+        Show-FrameOutcome (Resolve-FrameLink -HostName $script:FrameHostBox.Text)
+    })
+    $connect.Add_Click({
+        Show-FrameOutcome (Resolve-FrameLink -IpAddress $script:FrameIpBox.Text -IpOnly)
+    })
+    $usb.Add_Click({
+        Show-FrameOutcome (Resolve-FrameLink -UseUsb)
     })
     $next.Add_Click({ Show-Install })
-    $state = Resolve-FrameState
-    $key = Get-FrameErrorKey $state
-    if ($key) { Set-Status (Get-EyeGrokErrorText -Key $key) } else { Set-Status "Frame is ready." }
+    Show-FrameOutcome (Resolve-FrameLink -HostName $script:FrameHostBox.Text)
 }
 
 function Show-Install {
@@ -496,7 +565,8 @@ function Show-Install {
         }
     })
     $remove.Add_Click({
-        Invoke-Adb -ArgumentList @("-s", "localhost:5555", "uninstall", "io.github.eyegrok.ping") | Out-Null
+        $serial = Get-FrameSerial
+        Invoke-Adb -ArgumentList @("-s", $serial, "uninstall", "io.github.eyegrok.ping") | Out-Null
         Set-Status "Uninstall requested."
     })
     $next.Add_Click({ Show-Values })
