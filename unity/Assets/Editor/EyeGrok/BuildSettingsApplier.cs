@@ -81,6 +81,7 @@ namespace EyeGrok.Editor
             EnsureAppScene();
             EnsureAndroidOpenXr(false);
             EnsureOpenXrPackageSettingsLoaded();
+            OpenXrFeatures.ApplyAndroid();
 
             AssetDatabase.SaveAssets();
             LogSettings();

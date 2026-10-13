@@ -90,6 +90,22 @@ $proc = Start-Process -FilePath $unity -ArgumentList @(
     "-logFile", $logPath
 ) -Wait -PassThru
 $code = $proc.ExitCode
+# Exit 2 means the probe plugin import changed and Unity reloaded. Run the build once more.
+if ($code -eq 2) {
+    Write-Host "BUILD retry after plugin import"
+    $proc = Start-Process -FilePath $unity -ArgumentList @(
+        "-batchmode",
+        "-nographics",
+        "-quit",
+        "-projectPath", $Project,
+        "-buildTarget", "Android",
+        "-executeMethod", "EyeGrok.Editor.BuildScript.BuildAndroid",
+        "-eyegrokVariant", $Variant,
+        "-eyegrokOut", $outPath,
+        "-logFile", $logPath
+    ) -Wait -PassThru
+    $code = $proc.ExitCode
+}
 if ($code -ne 0) {
     Write-Error ("Unity exited " + $code + ". Log: .local/logs/" + (Split-Path -Leaf $logPath))
     exit $code

@@ -55,6 +55,11 @@ function Test-Bitmask([string]$token) {
     return $token -match '^[01]+$'
 }
 
+# Input System action ids are UUIDs. A key does not use this 8-4-4-4-12 shape.
+function Test-Uuid([string]$token) {
+    return $token -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+}
+
 # Field names like AndroidEnableArmv9SecurityFeatures. A real key is not a
 # short-digit camelCase word. At most two digits and a 5-letter lowercase run.
 function Test-CodeIdentifier([string]$token) {
@@ -120,6 +125,7 @@ foreach ($rel in $filesRaw) {
                 $bad = $false
                 foreach ($m in $matches) {
                     if (Test-HexIdentifier $m.Value) { continue }
+                    if (Test-Uuid $m.Value) { continue }
                     if (Test-AlphabeticIdentifier $m.Value) { continue }
                     if (Test-Bitmask $m.Value) { continue }
                     if (Test-CodeIdentifier $m.Value) { continue }

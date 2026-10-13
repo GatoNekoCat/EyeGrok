@@ -39,6 +39,12 @@ namespace EyeGrok.Editor
 
                 BuildSettingsApplier.Apply();
                 BuildSettingsApplier.SetOpenXrForVariant(variant);
+                if (SetProbePlugin(variant == "probe-flat" || variant == "probe-xr", true))
+                {
+                    Debug.Log("PROBE_JAVA=reload");
+                    EditorApplication.Exit(2);
+                    return;
+                }
 
                 var scene = BuildSettingsApplier.SceneForVariant(variant);
                 if (string.IsNullOrEmpty(scene) || !File.Exists(scene))
@@ -64,6 +70,7 @@ namespace EyeGrok.Editor
                 };
 
                 var report = BuildPipeline.BuildPlayer(options);
+                RestoreSharedSettings();
                 if (report.summary.result != BuildResult.Succeeded)
                 {
                     Debug.LogError("BUILD_FAILED " + report.summary.result);
@@ -77,8 +84,35 @@ namespace EyeGrok.Editor
             catch (Exception ex)
             {
                 Debug.LogError("err=" + ex.GetType().Name);
+                try { RestoreSharedSettings(); } catch (Exception) { }
                 EditorApplication.Exit(1);
             }
+        }
+
+        // EyeGrokProbe.java is the headset probe. The app player must not compile it in.
+        const string ProbePlugin = "Assets/Plugins/Android/EyeGrokProbe.java";
+
+        static bool SetProbePlugin(bool enabled, bool reimport)
+        {
+            var importer = AssetImporter.GetAtPath(ProbePlugin) as PluginImporter;
+            if (importer == null) return false;
+            Debug.Log(enabled ? "PROBE_JAVA=on" : "PROBE_JAVA=off");
+            if (importer.GetCompatibleWithPlatform(BuildTarget.Android) == enabled) return false;
+            importer.SetCompatibleWithPlatform(BuildTarget.Android, enabled);
+            if (!reimport)
+            {
+                AssetDatabase.WriteImportSettingsIfDirty(ProbePlugin);
+                return false;
+            }
+            importer.SaveAndReimport();
+            return true;
+        }
+
+        static void RestoreSharedSettings()
+        {
+            BuildSettingsApplier.SetOpenXrForVariant("app");
+            SetProbePlugin(false, false);
+            AssetDatabase.SaveAssets();
         }
 
         static void ApplySigning()

@@ -1,0 +1,5 @@
+# ggml-tiny.en-q5_1.bin
+# SHA-256 is the LFS oid from the Hugging Face model API
+# (api/models/ggerganov/whisper.cpp/tree/main, file ggml-tiny.en-q5_1.bin).
+# fetch-model checks the downloaded bytes against this line and deletes the file on mismatch.
+c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b  ggml-tiny.en-q5_1.bin
