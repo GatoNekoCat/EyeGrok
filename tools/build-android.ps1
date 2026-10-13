@@ -7,7 +7,8 @@ param(
     [ValidateSet("app", "probe-xr", "probe-flat", "probe-cam")]
     [string]$Variant,
     [ValidateSet("on", "off")]
-    [string]$Qr = "off"
+    [string]$Qr = "off",
+    [switch]$Dev
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,8 +104,12 @@ if ($qr -eq "on") {
     Test-EyeGrokZxing
 }
 
+$devFlag = "off"
+if ($Dev) { $devFlag = "on" }
 $outRel = switch ($Variant) {
-    "app" { "Builds\EyeGrok-v001.apk" }
+    "app" {
+        if ($Dev) { "Builds\EyeGrok-v001-dev.apk" } else { "Builds\EyeGrok-v001.apk" }
+    }
     "probe-xr" { "Builds\probes\EyeGrok-p0c-xr.apk" }
     "probe-flat" { "Builds\probes\EyeGrok-p0d-flat.apk" }
     "probe-cam" { "Builds\probes\EyeGrok-p0cam-flat.apk" }
@@ -117,7 +122,7 @@ $logDir = Join-Path $RepoRoot ".local\logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $logPath = Join-Path $logDir ("unity-build-" + $Variant + ".log")
 
-Write-Host ("BUILD variant=" + $Variant)
+Write-Host ("BUILD variant=" + $Variant + " dev=" + $devFlag)
 # Unity.exe is a GUI-subsystem binary. The call operator returns before it exits.
 # Exit 2 means a plugin or scripting define changed and Unity must reload. Retry up to twice.
 $code = 2
@@ -134,6 +139,7 @@ while ($code -eq 2 -and $attempt -lt 3) {
         "-executeMethod", "EyeGrok.Editor.BuildScript.BuildAndroid",
         "-eyegrokVariant", $Variant,
         "-eyegrokQr", $qr,
+        "-eyegrokDev", $devFlag,
         "-eyegrokOut", $outPath,
         "-logFile", $logPath
     ) -Wait -PassThru

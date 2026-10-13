@@ -399,7 +399,7 @@ namespace EyeGrok.Editor
             panel.View = view;
             panel.OpenPairButton = CreateLabeledButton(canvas, "Pair", new Vector2(0.72f, 0.90f), new Vector2(0.84f, 0.98f));
             panel.OpenChecklistButton = CreateLabeledButton(canvas, "Checklist", new Vector2(0.85f, 0.90f), new Vector2(0.96f, 0.98f));
-            panel.RepairButton = CreateLabeledButton(canvas, "Re-pair", new Vector2(0.66f, 0.46f), new Vector2(0.96f, 0.52f));
+            panel.RepairButton = CreateLabeledButton(canvas, "Re-pair", new Vector2(0.66f, 0.58f), new Vector2(0.96f, 0.66f));
 
             panel.PairRoot = CreateOverlay(canvas, "Pair Panel");
             CreateLabel(panel.PairRoot.transform, "Pair", 48, new Vector2(0.08f, 0.78f), new Vector2(0.92f, 0.92f), Color.white, false);
@@ -415,7 +415,7 @@ namespace EyeGrok.Editor
             panel.UsbRoot.SetActive(false);
 
             panel.PadRoot = CreateOverlay(canvas, "Number Pad");
-            panel.PadDisplay = CreateLabel(panel.PadRoot.transform, "", 64, new Vector2(0.08f, 0.78f), new Vector2(0.92f, 0.92f), Color.white, false);
+            panel.PadDisplay = CreateLabel(panel.PadRoot.transform, "---- ---- ---", 64, new Vector2(0.08f, 0.78f), new Vector2(0.92f, 0.92f), Color.white, false);
             panel.PadMessage = CreateLabel(panel.PadRoot.transform, "", 28, new Vector2(0.08f, 0.70f), new Vector2(0.92f, 0.78f), Color.white, false);
             string[] keys = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "Backspace", "0", "Clear" };
             for (var i = 0; i < keys.Length; i++)
@@ -424,11 +424,11 @@ namespace EyeGrok.Editor
                 var row = i / 3;
                 var x0 = 0.12f + col * 0.26f;
                 var y1 = 0.62f - row * 0.12f;
-                var label = keys[i] == "Backspace" ? "\u232b" : keys[i];
+                var label = keys[i] == "Backspace" ? "Back" : keys[i];
                 var button = CreateLabeledButton(panel.PadRoot.transform, label, new Vector2(x0, y1 - 0.10f), new Vector2(x0 + 0.24f, y1));
                 button.gameObject.name = keys[i];
             }
-            var ok = CreateLabeledButton(panel.PadRoot.transform, "OK", new Vector2(0.28f, 0.06f), new Vector2(0.72f, 0.16f));
+            var ok = CreateLabeledButton(panel.PadRoot.transform, "OK", new Vector2(0.28f, 0.02f), new Vector2(0.72f, 0.12f));
             ok.gameObject.name = "OK";
             panel.PadRoot.SetActive(false);
 
@@ -457,7 +457,7 @@ namespace EyeGrok.Editor
         {
             var scrollGo = new GameObject("Reply");
             scrollGo.transform.SetParent(parent, false);
-            Stretch(scrollGo.AddComponent<RectTransform>(), new Vector2(0.04f, 0.46f), new Vector2(0.96f, 0.68f));
+            Stretch(scrollGo.AddComponent<RectTransform>(), new Vector2(0.04f, 0.46f), new Vector2(0.64f, 0.68f));
             var scroll = scrollGo.AddComponent<ScrollRect>();
             scroll.horizontal = false;
             scroll.movementType = ScrollRect.MovementType.Clamped;

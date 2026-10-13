@@ -65,9 +65,10 @@ namespace EyeGrok.Editor
 
                 ApplySigning();
                 EditorUserBuildSettings.buildAppBundle = false;
-                EditorUserBuildSettings.development = false;
+                var dev = Arg("-eyegrokDev") == "on";
+                EditorUserBuildSettings.development = dev;
                 EditorUserBuildSettings.connectProfiler = false;
-                EditorUserBuildSettings.allowDebugging = false;
+                EditorUserBuildSettings.allowDebugging = dev;
 
                 var options = new BuildPlayerOptions
                 {
@@ -75,7 +76,7 @@ namespace EyeGrok.Editor
                     locationPathName = outPath,
                     target = BuildTarget.Android,
                     targetGroup = BuildTargetGroup.Android,
-                    options = BuildOptions.None
+                    options = dev ? BuildOptions.Development | BuildOptions.AllowDebugging : BuildOptions.None
                 };
 
                 var report = BuildPipeline.BuildPlayer(options);
@@ -146,6 +147,9 @@ namespace EyeGrok.Editor
 
         static void RestoreSharedSettings()
         {
+            EditorUserBuildSettings.development = false;
+            EditorUserBuildSettings.connectProfiler = false;
+            EditorUserBuildSettings.allowDebugging = false;
             BuildSettingsApplier.SetOpenXrForVariant("app");
             ApplyPlugin(ProbePlugin, false);
             ApplyPlugin(CamProbePlugin, false);

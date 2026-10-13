@@ -86,13 +86,7 @@ namespace EyeGrok.UI
             DisableRichText(SetupLine);
             if (DebugInput != null && DebugInput.textComponent != null)
                 DebugInput.textComponent.supportRichText = false;
-            var debug = false;
-#if UNITY_EDITOR
-            debug = true;
-#else
-            debug = Debug.isDebugBuild;
-#endif
-            if (DebugPanel != null) DebugPanel.SetActive(debug);
+            ApplyDebugChrome();
             BindPushToTalk();
             LoadStoredSecrets();
             Refresh();
@@ -213,8 +207,37 @@ namespace EyeGrok.UI
 
         void OnDebugSend()
         {
-            if (DebugInput == null) return;
+            if (!DebugTypingAllowed(InEditor(), Debug.isDebugBuild)) return;
+            if (DebugInput == null || !DebugInput.gameObject.activeInHierarchy) return;
             var _ = _controller.SubmitText(DebugInput.text);
+        }
+
+        void ApplyDebugChrome()
+        {
+            var editor = InEditor();
+            var show = DebugTypingAllowed(editor, Debug.isDebugBuild);
+            if (DebugPanel != null) DebugPanel.SetActive(show);
+            ApplyDebugInputObject(DebugInput != null ? DebugInput.gameObject : null, editor, Debug.isDebugBuild);
+        }
+
+        static bool InEditor()
+        {
+#if UNITY_EDITOR
+            return true;
+#else
+            return false;
+#endif
+        }
+
+        public static bool DebugTypingAllowed(bool editor, bool debugBuild)
+        {
+            return editor || debugBuild;
+        }
+
+        public static void ApplyDebugInputObject(GameObject input, bool editor, bool debugBuild)
+        {
+            if (input == null) return;
+            input.SetActive(DebugTypingAllowed(editor, debugBuild));
         }
 
         void BindPushToTalk()

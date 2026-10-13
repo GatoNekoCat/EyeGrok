@@ -434,6 +434,28 @@ namespace EyeGrok.Tests
         }
 
         [Test]
+        public void T19_DebugInputHiddenUnlessEditorOrDevelopment()
+        {
+            Assert.IsFalse(PingView.DebugTypingAllowed(false, false));
+            Assert.IsTrue(PingView.DebugTypingAllowed(true, false));
+            Assert.IsTrue(PingView.DebugTypingAllowed(false, true));
+            var go = new GameObject("Debug Input");
+            try
+            {
+                PingView.ApplyDebugInputObject(go, false, false);
+                Assert.IsFalse(go.activeSelf);
+                PingView.ApplyDebugInputObject(go, true, false);
+                Assert.IsTrue(go.activeSelf);
+                PingView.ApplyDebugInputObject(go, false, true);
+                Assert.IsTrue(go.activeSelf);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        [Test]
         public void T14_ReplyRichTextOffAndTruncated()
         {
             var sink = new FakeSink { RichText = true, Text = "x" };

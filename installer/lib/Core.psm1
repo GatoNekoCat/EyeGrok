@@ -553,5 +553,8 @@ Export-ModuleMember -Function @(
     "Get-DammDigit",
     "ConvertTo-EyeGrokB64Url",
     "ConvertFrom-EyeGrokB64Url",
-    "Unprotect-EyeGrokPlain"
+    "Unprotect-EyeGrokPlain",
+    "Get-EyeGrokHkdf",
+    "New-CodePairing",
+    "New-QrPairing"
 )
