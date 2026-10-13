@@ -23,6 +23,11 @@ namespace EyeGrok.Config
         {
             var outcome = new ImportOutcome();
             if (string.IsNullOrEmpty(path) || store == null || !File.Exists(path)) return outcome;
+            if (path.EndsWith(".part", StringComparison.Ordinal))
+            {
+                TryDelete(path);
+                return outcome;
+            }
             outcome.Found = true;
             string json = null;
             string fail = null;
@@ -57,18 +62,11 @@ namespace EyeGrok.Config
                 return outcome;
             }
 
-            if (!PutQuiet(store, "webhookUrl", data.webhookUrl)
-                || !PutQuiet(store, "webhookKey", data.webhookKey)
-                || !PutQuiet(store, "relayUrl", data.relayUrl)
-                || !PutQuiet(store, "relayReadKey", data.relayReadKey))
+            if (!SetupApplier.Apply(data, store))
             {
                 outcome.Message = "Setup save failed";
                 return outcome;
             }
-            Redactor.Register(data.webhookKey);
-            Redactor.Register(data.relayReadKey);
-            Redactor.Register(UrlPath(data.webhookUrl));
-            Redactor.Register(UrlPath(data.relayUrl));
             outcome.Ok = true;
             outcome.Message = "Setup imported";
             return outcome;
@@ -83,18 +81,6 @@ namespace EyeGrok.Config
             var slash = rest.IndexOf('/');
             if (slash < 0 || slash >= rest.Length - 1) return "";
             return rest.Substring(slash);
-        }
-
-        static bool PutQuiet(ISecretStore store, string name, string value)
-        {
-            try
-            {
-                return store.Put(name, value);
-            }
-            catch (Exception)
-            {
-                return false;
-            }
         }
 
         static void TryDelete(string path)

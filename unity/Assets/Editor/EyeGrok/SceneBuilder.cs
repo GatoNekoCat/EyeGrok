@@ -359,7 +359,7 @@ namespace EyeGrok.Editor
             TextKit.ConfigureOverlay(canvas, scaler);
             canvasGo.AddComponent<GraphicRaycaster>();
 
-            view.SetupLine = CreateLabel(canvasGo.transform, "Setup", 32, new Vector2(0.04f, 0.90f), new Vector2(0.96f, 0.98f), Color.white, false);
+            view.SetupLine = CreateLabel(canvasGo.transform, "Not set up — tap Pair", 32, new Vector2(0.04f, 0.90f), new Vector2(0.70f, 0.98f), Color.white, false);
             view.StatusLine = CreateLabel(canvasGo.transform, "Status", 36, new Vector2(0.04f, 0.82f), new Vector2(0.96f, 0.90f), Color.white, false);
             view.TranscriptLine = CreateLabel(canvasGo.transform, "Transcript", 32, new Vector2(0.04f, 0.68f), new Vector2(0.96f, 0.82f), Color.white, false);
             view.ReplyLine = CreateReply(canvasGo.transform);
@@ -380,6 +380,8 @@ namespace EyeGrok.Editor
 
             view.Mic = mic;
             view.Stt = stt;
+            view.SetupLine.text = "Not set up — tap Pair";
+            BuildPairingChrome(canvasGo.transform, view);
 
             var events = new GameObject("EventSystem");
             events.AddComponent<EventSystem>();
@@ -389,6 +391,66 @@ namespace EyeGrok.Editor
             AssetDatabase.SaveAssets();
             Debug.Log("PING_SCENE=ok");
             EditorApplication.Exit(0);
+        }
+
+        static void BuildPairingChrome(Transform canvas, PingView view)
+        {
+            var panel = view.gameObject.AddComponent<PairingPanel>();
+            panel.View = view;
+            panel.OpenPairButton = CreateLabeledButton(canvas, "Pair", new Vector2(0.72f, 0.90f), new Vector2(0.84f, 0.98f));
+            panel.OpenChecklistButton = CreateLabeledButton(canvas, "Checklist", new Vector2(0.85f, 0.90f), new Vector2(0.96f, 0.98f));
+            panel.RepairButton = CreateLabeledButton(canvas, "Re-pair", new Vector2(0.66f, 0.46f), new Vector2(0.96f, 0.52f));
+
+            panel.PairRoot = CreateOverlay(canvas, "Pair Panel");
+            CreateLabel(panel.PairRoot.transform, "Pair", 48, new Vector2(0.08f, 0.78f), new Vector2(0.92f, 0.92f), Color.white, false);
+            var scan = CreateLabeledButton(panel.PairRoot.transform, "Scan QR", new Vector2(0.18f, 0.58f), new Vector2(0.82f, 0.72f));
+            scan.gameObject.AddComponent<EnableIfQr>();
+            panel.ScanButton = scan.gameObject;
+            CreateLabeledButton(panel.PairRoot.transform, "Enter code", new Vector2(0.18f, 0.40f), new Vector2(0.82f, 0.54f));
+            CreateLabeledButton(panel.PairRoot.transform, "Use USB", new Vector2(0.18f, 0.22f), new Vector2(0.82f, 0.36f));
+            panel.PairRoot.SetActive(false);
+
+            panel.UsbRoot = CreateOverlay(canvas, "USB");
+            CreateLabel(panel.UsbRoot.transform, "Run the installer's USB push tab", 36, new Vector2(0.08f, 0.40f), new Vector2(0.92f, 0.60f), Color.white, true);
+            panel.UsbRoot.SetActive(false);
+
+            panel.PadRoot = CreateOverlay(canvas, "Number Pad");
+            panel.PadDisplay = CreateLabel(panel.PadRoot.transform, "", 64, new Vector2(0.08f, 0.78f), new Vector2(0.92f, 0.92f), Color.white, false);
+            panel.PadMessage = CreateLabel(panel.PadRoot.transform, "", 28, new Vector2(0.08f, 0.70f), new Vector2(0.92f, 0.78f), Color.white, false);
+            string[] keys = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "Backspace", "0", "Clear" };
+            for (var i = 0; i < keys.Length; i++)
+            {
+                var col = i % 3;
+                var row = i / 3;
+                var x0 = 0.12f + col * 0.26f;
+                var y1 = 0.62f - row * 0.12f;
+                var label = keys[i] == "Backspace" ? "\u232b" : keys[i];
+                var button = CreateLabeledButton(panel.PadRoot.transform, label, new Vector2(x0, y1 - 0.10f), new Vector2(x0 + 0.24f, y1));
+                button.gameObject.name = keys[i];
+            }
+            var ok = CreateLabeledButton(panel.PadRoot.transform, "OK", new Vector2(0.28f, 0.06f), new Vector2(0.72f, 0.16f));
+            ok.gameObject.name = "OK";
+            panel.PadRoot.SetActive(false);
+
+            panel.ChecklistRoot = CreateOverlay(canvas, "Checklist");
+            CreateLabel(panel.ChecklistRoot.transform, "Checklist", 48, new Vector2(0.08f, 0.78f), new Vector2(0.92f, 0.92f), Color.white, false);
+            panel.MicLine = CreateLabel(panel.ChecklistRoot.transform, "Mic  red", 40, new Vector2(0.12f, 0.60f), new Vector2(0.88f, 0.72f), new Color(0.86f, 0.28f, 0.24f), false);
+            panel.RelayLine = CreateLabel(panel.ChecklistRoot.transform, "Relay  red", 40, new Vector2(0.12f, 0.46f), new Vector2(0.88f, 0.58f), new Color(0.86f, 0.28f, 0.24f), false);
+            panel.RoutineLine = CreateLabel(panel.ChecklistRoot.transform, "Routine  not tested", 40, new Vector2(0.12f, 0.32f), new Vector2(0.88f, 0.44f), new Color(0.62f, 0.64f, 0.68f), false);
+            var testPing = CreateLabeledButton(panel.ChecklistRoot.transform, "Test ping", new Vector2(0.22f, 0.12f), new Vector2(0.78f, 0.24f));
+            testPing.gameObject.name = "Test ping";
+            panel.ChecklistRoot.SetActive(false);
+        }
+
+        static GameObject CreateOverlay(Transform parent, string name)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            Stretch(go.AddComponent<RectTransform>(), Vector2.zero, Vector2.one);
+            var image = go.AddComponent<Image>();
+            image.color = new Color(0.08f, 0.09f, 0.11f, 1f);
+            image.raycastTarget = true;
+            return go;
         }
 
         static Text CreateReply(Transform parent)

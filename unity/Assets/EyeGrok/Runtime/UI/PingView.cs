@@ -32,6 +32,22 @@ namespace EyeGrok.UI
         public MicRecorder Mic;
         public WhisperStt Stt;
 
+        public ISecretStore Store { get { return _store; } }
+
+        public void MarkConfigured()
+        {
+            if (_controller == null) return;
+            _controller.NotifyConfigured();
+            if (SetupLine != null) SetupLine.text = "Configured";
+            Refresh();
+        }
+
+        public async Task<PingState> RunFixed(string text)
+        {
+            await _controller.SendFixed(text);
+            return _controller.State;
+        }
+
         PingController _controller;
         ISecretStore _store;
         InputAction _pushToTalk;
@@ -147,7 +163,7 @@ namespace EyeGrok.UI
                 || !_store.TryGet("relayUrl", out relayUrl)
                 || !_store.TryGet("relayReadKey", out relayReadKey))
             {
-                if (SetupLine != null) SetupLine.text = "Not set up — see docs/SETUP.md";
+                if (SetupLine != null) SetupLine.text = "Not set up — tap Pair";
                 return;
             }
             Redactor.Register(webhookKey);
@@ -191,7 +207,7 @@ namespace EyeGrok.UI
                 return;
             }
             _controller.Forget();
-            if (SetupLine != null) SetupLine.text = "Not set up — see docs/SETUP.md";
+            if (SetupLine != null) SetupLine.text = "Not set up — tap Pair";
             Refresh();
         }
 

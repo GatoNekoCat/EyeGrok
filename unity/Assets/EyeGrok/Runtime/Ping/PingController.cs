@@ -40,7 +40,7 @@ namespace EyeGrok.Ping
             _store = store;
             _clock = clock;
             State = PingState.Unconfigured;
-            Hint = "Not set up — see docs/SETUP.md";
+            Hint = "Not set up — tap Pair";
         }
 
         public PingState State { get; private set; }
@@ -146,7 +146,16 @@ namespace EyeGrok.Ping
             _nonce = "";
             Transcript = "";
             Reply = "";
-            Set(PingState.Unconfigured, "Not set up — see docs/SETUP.md");
+            Set(PingState.Unconfigured, "Not set up — tap Pair");
+        }
+
+        public async Task SendFixed(string text)
+        {
+            if (State == PingState.Unconfigured || Busy) return;
+            if (string.IsNullOrEmpty(text)) return;
+            _cts = new CancellationTokenSource();
+            _run = SendTranscript(text, _cts.Token);
+            await _run;
         }
 
         async Task RecordLoop(CancellationToken ct)

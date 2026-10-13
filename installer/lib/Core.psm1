@@ -1,0 +1,548 @@
+# Copyright 2026 EyeGrok contributors
+# SPDX-License-Identifier: Apache-2.0
+# Installer logic for Windows PowerShell 5.1. No UI. No setup values in arguments or the log.
+
+$ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$script:LicenseUrl = "https://developer.android.com/tools/releases/platform-tools"
+$script:PlatformToolsUrl = "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip"
+# SHA-1 of that zip, from dl.google.com/android/repository/repository2-3.xml (platform-tools 37.0.1, windows).
+$script:PlatformToolsSha1 = "e03e78b1d80b396f1c3358e31251cb31740e1110"
+$script:PackageId = "io.github.eyegrok.ping"
+$script:LibDir = $PSScriptRoot
+
+. (Join-Path $script:LibDir "PairCrypto.ps1")
+. (Join-Path $script:LibDir "QrEncoder.ps1")
+
+function Get-EyeGrokHome {
+    if ($env:EYEGROK_HOME) { return $env:EYEGROK_HOME }
+    return (Join-Path $env:LOCALAPPDATA "EyeGrok")
+}
+
+function Get-EyeGrokLicenseUrl {
+    return $script:LicenseUrl
+}
+
+function Get-EyeGrokErrorText {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [string]$Detail
+    )
+    if ($Key -eq "E_NO_FRAME") {
+        return "No Frame found. Check the USB cable, turn on Developer Mode, and start Lepton Development from the Steam Library on the Frame. Then click Retry."
+    }
+    if ($Key -eq "E_UNAUTHORIZED") {
+        return "The Frame is connected but has not allowed this PC. Put on the headset, allow USB debugging, then click Retry."
+    }
+    if ($Key -eq "E_NO_LEPTON") {
+        return "The Frame is connected, but Lepton Development is not running. Start Lepton Development from the Steam Library on the Frame, then click Retry."
+    }
+    if ($Key -eq "E_INSTALL") {
+        $code = "UNKNOWN"
+        $hint = "Try again."
+        if ($Detail -eq "INSUFFICIENT_STORAGE") {
+            $code = "INSUFFICIENT_STORAGE"
+            $hint = "Free some space on the Frame."
+        } elseif ($Detail -eq "UPDATE_INCOMPATIBLE") {
+            $code = "UPDATE_INCOMPATIBLE"
+            $hint = "Remove the old EyeGrok first."
+        } elseif ($Detail) {
+            $code = $Detail
+        }
+        return "EyeGrok did not install (" + $code + "). " + $hint
+    }
+    if ($Key -eq "E_IMPORT") {
+        return "The headset did not take the setup. Open EyeGrok on the Frame and try again, or use another pairing tab."
+    }
+    if ($Key -eq "E_PAIR_OFF") {
+        return "Pairing is off on your relay. Add PAIR_KEY (see docs/RELAY.md), or use the USB push tab."
+    }
+    if ($Key -eq "E_PAIR_KEY") {
+        return "The relay rejected the pairing key."
+    }
+    if ($Key -eq "E_NO_APK") {
+        return "No EyeGrok APK next to the installer. Click Browse to pick one."
+    }
+    if ($Key -eq "E_DOWNLOAD") {
+        return "Could not download Android platform-tools. Check your internet connection, then click Retry."
+    }
+    if ($Key -eq "E_VERIFY") {
+        return "The downloaded platform-tools did not pass the signature check. Nothing was run."
+    }
+    if ($Key -eq "E_LICENSE_NOT_ACCEPTED") {
+        return "Accept the Android SDK Platform-Tools terms before download."
+    }
+    return $Key
+}
+
+function Write-InstallerLog {
+    param([string]$Step, [int]$Code, [string]$Key)
+    $dir = Join-Path (Get-EyeGrokHome) "logs"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $line = $Step + " code=" + $Code
+    if ($Key) { $line = $line + " key=" + $Key }
+    $path = Join-Path $dir "installer.log"
+    [System.IO.File]::AppendAllText($path, $line + "`n", (New-Object System.Text.UTF8Encoding $false))
+}
+
+function Find-Adb {
+    if ($env:EYEGROK_ADB -and (Test-Path -LiteralPath $env:EYEGROK_ADB)) {
+        return $env:EYEGROK_ADB
+    }
+    $cmd = Get-Command adb -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) { return $cmd.Source }
+    $local = Join-Path (Get-EyeGrokHome) "platform-tools\adb.exe"
+    if (Test-Path -LiteralPath $local) { return $local }
+    return $null
+}
+
+function ConvertTo-QuotedArgs {
+    param([string[]]$ArgumentList)
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($arg in $ArgumentList) {
+        if ($arg -match '[\s"]') {
+            $parts.Add('"' + $arg.Replace('"', '\"') + '"')
+        } else {
+            $parts.Add($arg)
+        }
+    }
+    return ($parts -join " ")
+}
+
+function Invoke-Adb {
+    param(
+        [string[]]$ArgumentList,
+        [byte[]]$StdinBytes
+    )
+    $adb = Find-Adb
+    if (-not $adb) { return @{ Code = 127; Stdout = ""; Stderr = "no adb" } }
+    $file = $adb
+    $argsText = ConvertTo-QuotedArgs $ArgumentList
+    $shim = Join-Path (Split-Path -Parent $adb) "fake-adb.ps1"
+    if ((Test-Path -LiteralPath $shim) -and ($adb.EndsWith(".cmd") -or $adb.EndsWith(".ps1"))) {
+        $file = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+        $argsText = "-NoProfile -ExecutionPolicy Bypass -File " + (ConvertTo-QuotedArgs @($shim)) + " " + $argsText
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $file
+    $psi.Arguments = $argsText
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardInput = $true
+    $psi.CreateNoWindow = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    [void]$proc.Start()
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+    if ($StdinBytes -ne $null -and $StdinBytes.Length -gt 0) {
+        $proc.StandardInput.BaseStream.Write($StdinBytes, 0, $StdinBytes.Length)
+        $proc.StandardInput.BaseStream.Flush()
+    }
+    $proc.StandardInput.Close()
+    $exited = $proc.WaitForExit(60000)
+    if (-not $exited) {
+        try { $proc.Kill() } catch { }
+        Get-Process -Name adb -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch { } }
+        $proc.WaitForExit(5000) | Out-Null
+    }
+    if (-not $stdoutTask.Wait(3000)) {
+        Get-Process -Name adb -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch { } }
+        [void]$stdoutTask.Wait(3000)
+    }
+    if (-not $stderrTask.Wait(3000)) { [void]$stderrTask.Wait(2000) }
+    $stdoutText = ""
+    $stderrText = ""
+    if ($stdoutTask.IsCompleted -and -not $stdoutTask.IsFaulted -and -not $stdoutTask.IsCanceled) { $stdoutText = [string]$stdoutTask.Result }
+    if ($stderrTask.IsCompleted -and -not $stderrTask.IsFaulted -and -not $stderrTask.IsCanceled) { $stderrText = [string]$stderrTask.Result }
+    $code = 124
+    if ($proc.HasExited) {
+        try { $code = $proc.ExitCode } catch { $code = 124 }
+    }
+    return @{ Code = $code; Stdout = $stdoutText; Stderr = $stderrText }
+}
+
+function Install-PlatformTools {
+    param([switch]$Accepted)
+    $egHome = Get-EyeGrokHome
+    $existing = Join-Path $egHome "platform-tools\adb.exe"
+    if (Test-Path -LiteralPath $existing) { return "OK" }
+    if (-not $Accepted) { return "E_LICENSE_NOT_ACCEPTED" }
+    $dl = Join-Path $egHome "dl"
+    New-Item -ItemType Directory -Force -Path $dl | Out-Null
+    $zip = Join-Path $dl "platform-tools.zip"
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($script:PlatformToolsUrl)
+        $request.Method = "GET"
+        $request.Timeout = 120000
+        $request.ReadWriteTimeout = 120000
+        $response = $request.GetResponse()
+        $inputStream = $response.GetResponseStream()
+        $output = [System.IO.File]::Create($zip)
+        try {
+            $inputStream.CopyTo($output)
+        } finally {
+            $output.Close()
+            $inputStream.Close()
+            $response.Close()
+        }
+    } catch {
+        Write-InstallerLog "download" 1 "E_DOWNLOAD"
+        if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+        return "E_DOWNLOAD"
+    }
+    $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA1).Hash.ToLower()
+    if ($actual -ne $script:PlatformToolsSha1) {
+        Remove-Item -LiteralPath $zip -Force
+        Write-InstallerLog "verify" 1 "E_VERIFY"
+        return "E_VERIFY"
+    }
+    $extract = Join-Path $dl "extract"
+    New-Item -ItemType Directory -Force -Path $extract | Out-Null
+    [void][System.Reflection.Assembly]::Load("System.IO.Compression.FileSystem, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $extract)
+    Remove-Item -LiteralPath $zip -Force
+    $adb = Join-Path $extract "platform-tools\adb.exe"
+    if (-not (Test-Path -LiteralPath $adb)) {
+        Write-InstallerLog "verify" 1 "E_VERIFY"
+        return "E_VERIFY"
+    }
+    $sig = Get-AuthenticodeSignature -LiteralPath $adb
+    $subject = ""
+    if ($sig.SignerCertificate) { $subject = $sig.SignerCertificate.Subject }
+    if ($sig.Status -ne "Valid" -or $subject.IndexOf("CN=Google LLC") -lt 0) {
+        Write-InstallerLog "verify" 1 "E_VERIFY"
+        return "E_VERIFY"
+    }
+    $dest = Join-Path $egHome "platform-tools"
+    if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $egHome | Out-Null
+    [System.IO.Directory]::Move((Join-Path $extract "platform-tools"), $dest)
+    Write-InstallerLog "tools" 0 ""
+    return "OK"
+}
+
+function Get-FrameState {
+    $result = Invoke-Adb -ArgumentList @("devices", "-l")
+    $ready = $false
+    $unauth = $false
+    $usb = $false
+    foreach ($line in ($result.Stdout -split "`n")) {
+        $text = $line.Trim()
+        if ($text.Length -eq 0) { continue }
+        if ($text.StartsWith("List of devices")) { continue }
+        if ($text.StartsWith("localhost:5555") -and $text -match "\sdevice(\s|$)") { $ready = $true }
+        elseif ($text -match "unauthorized") { $unauth = $true }
+        elseif ($text -match "\sdevice(\s|$)") { $usb = $true }
+    }
+    if ($ready) { return "Ready" }
+    if ($unauth) { return "Unauthorized" }
+    if ($usb) { return "UsbOnly" }
+    return "NoDevice"
+}
+
+function Connect-Lepton {
+    Invoke-Adb -ArgumentList @("forward", "tcp:5555", "tcp:5555") | Out-Null
+    Invoke-Adb -ArgumentList @("connect", "localhost:5555") | Out-Null
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        if ((Get-FrameState) -eq "Ready") { return "Ready" }
+        Start-Sleep -Milliseconds 400
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return (Get-FrameState)
+}
+
+function Find-NewestApk {
+    param([string]$Directory, [string]$Chosen)
+    if ($Chosen -and (Test-Path -LiteralPath $Chosen)) { return $Chosen }
+    if (-not $Directory) { return $null }
+    $files = @(Get-ChildItem -LiteralPath $Directory -Filter "EyeGrok-*.apk" -File -ErrorAction SilentlyContinue)
+    if ($files.Count -eq 0) { return $null }
+    return ($files | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+}
+
+function Install-EyeGrokApk {
+    param([Parameter(Mandatory = $true)][string]$ApkPath)
+    $result = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "install", "-r", $ApkPath)
+    $text = $result.Stdout + "`n" + $result.Stderr
+    if ($result.Code -eq 0 -and $text -match "Success") {
+        Write-InstallerLog "install" 0 ""
+        return @{ Key = "OK"; Detail = "" }
+    }
+    $detail = "UNKNOWN"
+    if ($text -match "Failure \[([A-Z0-9_]+)\]") { $detail = $Matches[1] }
+    Write-InstallerLog "install" $result.Code $detail
+    return @{ Key = "E_INSTALL"; Detail = $detail }
+}
+
+function ConvertTo-SetupJson {
+    param($Values)
+    $pairs = @(
+        @("webhookUrl", [string]$Values.webhookUrl),
+        @("webhookKey", [string]$Values.webhookKey),
+        @("relayUrl", [string]$Values.relayUrl),
+        @("relayReadKey", [string]$Values.relayReadKey)
+    )
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("{")
+    for ($i = 0; $i -lt $pairs.Count; $i++) {
+        if ($i -gt 0) { [void]$sb.Append(",") }
+        [void]$sb.Append('"')
+        [void]$sb.Append($pairs[$i][0])
+        [void]$sb.Append('":"')
+        [void]$sb.Append((ConvertTo-JsonString $pairs[$i][1]))
+        [void]$sb.Append('"')
+    }
+    [void]$sb.Append("}")
+    return $sb.ToString()
+}
+
+function ConvertTo-JsonString {
+    param([string]$Text)
+    if ($null -eq $Text) { return "" }
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $Text.ToCharArray()) {
+        $code = [int]$ch
+        if ($ch -eq '"') { [void]$sb.Append('\"') }
+        elseif ($ch -eq '\') { [void]$sb.Append('\\') }
+        elseif ($code -lt 32) { [void]$sb.Append('\u' + $code.ToString("x4")) }
+        else { [void]$sb.Append($ch) }
+    }
+    return $sb.ToString()
+}
+
+function Test-SetupValues {
+    param($Values, [switch]$AllowLoopbackHttp)
+    if ($null -eq $Values) { return "webhookUrl" }
+    foreach ($name in @("webhookUrl", "webhookKey", "relayUrl", "relayReadKey")) {
+        $value = [string]$Values.$name
+        if (-not $value) { return $name }
+    }
+    if (-not (Test-HttpsOrLoopback ([string]$Values.webhookUrl) $AllowLoopbackHttp)) { return "webhookUrl" }
+    if (-not (Test-KeyValue ([string]$Values.webhookKey))) { return "webhookKey" }
+    if (-not (Test-HttpsOrLoopback ([string]$Values.relayUrl) $AllowLoopbackHttp)) { return "relayUrl" }
+    if (-not (Test-KeyValue ([string]$Values.relayReadKey))) { return "relayReadKey" }
+    return $null
+}
+
+function Test-HttpsOrLoopback {
+    param([string]$Url, [bool]$AllowLoopbackHttp)
+    if (-not $Url -or $Url.Length -gt 2048) { return $false }
+    if ($Url.StartsWith("https://") -and $Url.Length -gt 8) { return $true }
+    if (-not $AllowLoopbackHttp) { return $false }
+    if ($Url.StartsWith("http://127.0.0.1")) { return $true }
+    if ($Url.StartsWith("http://localhost")) { return $true }
+    return $false
+}
+
+function Test-KeyValue {
+    param([string]$Key)
+    if (-not $Key -or $Key.Length -lt 16 -or $Key.Length -gt 512) { return $false }
+    foreach ($ch in $Key.ToCharArray()) {
+        if ([char]::IsWhiteSpace($ch)) { return $false }
+    }
+    return $true
+}
+
+function Invoke-PairHttp {
+    param([string]$Method, [string]$Url, [string]$Token, [byte[]]$Body)
+    $request = [System.Net.HttpWebRequest]::Create($Url)
+    $request.Method = $Method
+    $request.Timeout = 20000
+    $request.AllowAutoRedirect = $false
+    if ($Token) { $request.Headers["Authorization"] = "Bearer " + $Token }
+    if ($Body -ne $null) {
+        $request.ContentType = "application/json; charset=utf-8"
+        $request.ContentLength = $Body.Length
+        $stream = $request.GetRequestStream()
+        $stream.Write($Body, 0, $Body.Length)
+        $stream.Close()
+    }
+    $response = $null
+    try {
+        $response = $request.GetResponse()
+    } catch [System.Net.WebException] {
+        $response = $_.Exception.Response
+        if ($null -eq $response) { return @{ Status = 0; Body = "" } }
+    }
+    $status = [int]$response.StatusCode
+    $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+    $text = $reader.ReadToEnd()
+    $reader.Close()
+    $response.Close()
+    return @{ Status = $status; Body = $text }
+}
+
+function New-PairingEntry {
+    param([string]$RelayUrl, [string]$PairKey, [string]$Id, $Box)
+    $root = $RelayUrl.TrimEnd("/")
+    $payload = '{"id":"' + $Id + '","box":{"v":1,"iv":"' + $Box.iv + '","ct":"' + $Box.ct + '","mac":"' + $Box.mac + '"}}'
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    return Invoke-PairHttp "POST" ($root + "/pair") $PairKey $bytes
+}
+
+function Remove-PairingEntry {
+    param([string]$RelayUrl, [string]$PairKey, [string]$Id)
+    $root = $RelayUrl.TrimEnd("/")
+    return Invoke-PairHttp "DELETE" ($root + "/pair/" + $Id) $PairKey $null
+}
+
+function Send-StreamOverAdb {
+    param([string]$RemotePath, [byte[]]$Bytes)
+    $part = $RemotePath + ".part"
+    $command = "cat > " + $part + " && mv " + $part + " " + $RemotePath
+    $exec = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "exec-in", $command) -StdinBytes $Bytes
+    if ($exec.Code -eq 0) { return @{ Path = "exec-in"; Result = $exec } }
+    $shell = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "shell", $command) -StdinBytes $Bytes
+    if ($shell.Code -eq 0) { return @{ Path = "shell"; Result = $shell } }
+    $temp = Write-B3TempFile $Bytes
+    Write-InstallerLog "b3" 0 "tempfile"
+    try {
+        $pushed = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "push", $temp, $RemotePath)
+        return @{ Path = "tempfile"; Result = $pushed }
+    } finally {
+        Clear-B3TempFile $temp
+    }
+}
+
+function Write-B3TempFile {
+    param([byte[]]$Bytes)
+    $dir = Join-Path (Get-EyeGrokHome) "tmp"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $path = Join-Path $dir ("b3-" + [guid]::NewGuid().ToString("N"))
+    $stream = [System.IO.File]::Create($path)
+    try {
+        $stream.Write($Bytes, 0, $Bytes.Length)
+    } finally {
+        $stream.Close()
+    }
+    $acl = Get-Acl -LiteralPath $path
+    $acl.SetAccessRuleProtection($true, $false)
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().Name,
+        "FullControl",
+        "Allow")
+    $acl.SetAccessRule($rule)
+    Set-Acl -LiteralPath $path -AclObject $acl
+    return $path
+}
+
+function Clear-B3TempFile {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
+    $length = (Get-Item -LiteralPath $Path).Length
+    $zeros = New-Object byte[] $length
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write)
+    try {
+        $stream.Write($zeros, 0, $zeros.Length)
+        $stream.Flush()
+    } finally {
+        $stream.Close()
+    }
+    Remove-Item -LiteralPath $Path -Force
+}
+
+function Send-SetupOverAdb {
+    param([string]$Json)
+    $remote = "/sdcard/Android/data/" + $script:PackageId + "/files/eyegrok-setup.json"
+    $bytes = New-Object System.Text.UTF8Encoding $false
+    $sent = Send-StreamOverAdb -RemotePath $remote -Bytes ($bytes.GetBytes($Json))
+    $imported = $false
+    for ($i = 0; $i -lt 20; $i++) {
+        $listing = Invoke-Adb -ArgumentList @("-s", "localhost:5555", "shell", "ls", $remote)
+        $out = $listing.Stdout
+        if ($listing.Code -ne 0 -or $out -notmatch "eyegrok-setup.json") {
+            $imported = $true
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    $stdout = ""
+    if ($sent.Result) { $stdout = [string]$sent.Result.Stdout }
+    if ($imported) {
+        Write-InstallerLog "import" 0 ""
+        return @{ Key = "OK"; Stdout = $stdout }
+    }
+    Write-InstallerLog "import" 1 "E_IMPORT"
+    return @{ Key = "E_IMPORT"; Stdout = $stdout }
+}
+
+function Send-PairOrigin {
+    param([string]$RelayUrl)
+    if (-not $RelayUrl -or $RelayUrl.Length -gt 2048 -or $RelayUrl.Contains("`n")) { return "E_IMPORT" }
+    $remote = "/sdcard/Android/data/" + $script:PackageId + "/files/eyegrok-pair-origin.txt"
+    $bytes = New-Object System.Text.UTF8Encoding $false
+    $sent = Send-StreamOverAdb -RemotePath $remote -Bytes ($bytes.GetBytes($RelayUrl + "`n"))
+    if ($sent.Result.Code -eq 0) {
+        Write-InstallerLog "origin" 0 ""
+        return "OK"
+    }
+    Write-InstallerLog "origin" 1 "E_IMPORT"
+    return "E_IMPORT"
+}
+
+function Format-PairCode {
+    param([string]$Code11)
+    return $Code11.Substring(0, 4) + " " + $Code11.Substring(4, 4) + " " + $Code11.Substring(8, 3)
+}
+
+function New-SetupPairing {
+    param([string]$Json, [string]$RelayUrl, [string]$Mode, [string]$Code10)
+    if ($Mode -eq "code") {
+        $pair = New-CodePairing -Code10 $Code10
+        $box = Protect-SetupJson -Json $Json -EncKey $pair.Enc -MacKey $pair.Mac -Id $pair.Id
+        return @{
+            Id = (ConvertTo-EyeGrokB64Url $pair.Id)
+            Box = $box
+            Code10 = $pair.Code10
+            Code11 = $pair.Code11
+            Enc = $pair.Enc
+            Mac = $pair.Mac
+            RawId = $pair.Id
+        }
+    }
+    $pair = New-QrPairing -RelayUrl $RelayUrl
+    $box = Protect-SetupJson -Json $Json -EncKey $pair.Enc -MacKey $pair.Mac -Id $pair.Id
+    return @{
+        Id = (ConvertTo-EyeGrokB64Url $pair.Id)
+        Box = $box
+        Payload = $pair.Payload
+        Secret = $pair.Secret
+        Enc = $pair.Enc
+        Mac = $pair.Mac
+        RawId = $pair.Id
+    }
+}
+
+Export-ModuleMember -Function @(
+    "Get-EyeGrokHome",
+    "Get-EyeGrokLicenseUrl",
+    "Get-EyeGrokErrorText",
+    "Write-InstallerLog",
+    "Find-Adb",
+    "Invoke-Adb",
+    "Install-PlatformTools",
+    "Get-FrameState",
+    "Connect-Lepton",
+    "Find-NewestApk",
+    "Install-EyeGrokApk",
+    "ConvertTo-SetupJson",
+    "Test-SetupValues",
+    "Test-KeyValue",
+    "New-PairingEntry",
+    "Remove-PairingEntry",
+    "Send-SetupOverAdb",
+    "Send-PairOrigin",
+    "Format-PairCode",
+    "New-SetupPairing",
+    "New-EyeGrokQrMatrix",
+    "ConvertTo-QrAsciiRows",
+    "Get-DammDigit",
+    "ConvertTo-EyeGrokB64Url",
+    "ConvertFrom-EyeGrokB64Url",
+    "Unprotect-EyeGrokPlain"
+)

@@ -73,13 +73,13 @@ async function phaseOff() {
 
 async function phaseLimit() {
   const statuses = [];
-  for (let i = 0; i < 11; i++) {
+  for (let i = 0; i < 12; i++) {
     const res = await call("/pair/" + newId());
     assert(storeOk(res), "limit no-store");
     statuses.push(res.status);
   }
-  const misses = statuses.slice(0, 10).every((s) => s === 404);
-  assert(misses && statuses[10] === 429, "limit 10x404 then 429");
+  const misses = statuses.slice(0, 11).every((s) => s === 404);
+  assert(misses && statuses[11] === 429, "limit 11x404 then 429");
 }
 
 async function phaseMain() {

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Copyright 2026 EyeGrok contributors
 # SPDX-License-Identifier: Apache-2.0
-# Pushes a setup file to the headset and restarts the app. Never prints file contents.
+# Deprecated. Use installer/EyeGrok-Setup.cmd on Windows. Pushes a setup file and restarts the app. Never prints file contents.
 
 set -eu
 file="${1:-}"

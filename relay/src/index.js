@@ -89,7 +89,8 @@ function clientIp(request) {
 function missLimited(ip, now) {
   const slot = missBuckets.get(ip);
   if (!slot || now - slot.start >= MISS_WINDOW_MS) return false;
-  return slot.count >= MISS_LIMIT;
+  // 429 only once more than 10 misses are already recorded. The 11th miss is still 404.
+  return slot.count > MISS_LIMIT;
 }
 
 function noteMiss(ip, now) {

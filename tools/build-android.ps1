@@ -5,7 +5,9 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("app", "probe-xr", "probe-flat", "probe-cam")]
-    [string]$Variant
+    [string]$Variant,
+    [ValidateSet("on", "off")]
+    [string]$Qr = "off"
 )
 
 $ErrorActionPreference = "Stop"
@@ -94,11 +96,12 @@ if (-not (Test-Path -LiteralPath $Project)) {
 }
 
 Test-EyeGrokModel
-if ($Variant -eq "probe-cam") {
-    Test-EyeGrokZxing
-}
 $qr = "off"
 if ($Variant -eq "probe-cam") { $qr = "on" }
+if ($Variant -eq "app") { $qr = $Qr }
+if ($qr -eq "on") {
+    Test-EyeGrokZxing
+}
 
 $outRel = switch ($Variant) {
     "app" { "Builds\EyeGrok-v001.apk" }
