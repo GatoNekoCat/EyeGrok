@@ -16,5 +16,6 @@ The format is Keep a Changelog. This project uses semantic versions. `0.1.0` is 
 
 ### Changed
 
+- UI text uses Unity uGUI `Text` and the built-in LegacyRuntime font. TextMesh Pro essentials are not vendored.
 - Provisional decisions, pending headset results. D-1 is KV. D-2 is Mode B for the app. D-3 is debug signing. D-4 leaves TTS out of this version (plan section 6: no Lepton TTS engine, and Piper / espeak-ng are GPL).
 - Deployed relay smoke and P0-e timing are recorded in `docs/P0_RESULTS.md`. The Durable Object switch was not made. That call is still pending the owner. P0-e(c) median 28.2 s, max 48.4 s.

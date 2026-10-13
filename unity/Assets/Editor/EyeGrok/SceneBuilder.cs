@@ -5,7 +5,6 @@ using System.IO;
 using EyeGrok.Probes;
 using EyeGrok.UI;
 using EyeGrok.Voice;
-using TMPro;
 using Unity.XR.CoreUtils;
 using UnityEditor;
 using UnityEditor.Events;
@@ -113,11 +112,8 @@ namespace EyeGrok.Editor
 
             var canvasGo = new GameObject("Canvas");
             var canvas = canvasGo.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             var scaler = canvasGo.AddComponent<CanvasScaler>();
-            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920f, 1080f);
-            scaler.matchWidthOrHeight = 1f;
+            TextKit.ConfigureOverlay(canvas, scaler);
             canvasGo.AddComponent<GraphicRaycaster>();
 
             var panel = new GameObject("Panel");
@@ -196,8 +192,9 @@ namespace EyeGrok.Editor
             canvasGo.AddComponent<GraphicRaycaster>();
             var rt = canvasGo.GetComponent<RectTransform>();
             rt.sizeDelta = new Vector2(900f, 500f);
-            rt.localScale = new Vector3(0.0016f, 0.0016f, 0.0016f);
             canvasGo.transform.position = new Vector3(0f, 1.4f, 1.5f);
+            // 625 px/m keeps the panel at 1.44 m by 0.80 m and rasterizes one texel per canvas unit.
+            TextKit.ConfigureWorldCanvas(canvas, 625f);
 
             var button = CreateUiButton(canvasGo.transform, "EyeGrok P0-c");
             var buttonRt = button.GetComponent<RectTransform>();
@@ -229,13 +226,7 @@ namespace EyeGrok.Editor
             var go = new GameObject(value + " Label");
             go.transform.SetParent(parent, false);
             var text = go.AddComponent<Text>();
-            text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            text.text = value;
-            text.alignment = TextAnchor.MiddleCenter;
-            text.color = Color.black;
-            text.fontSize = size;
-            text.horizontalOverflow = HorizontalWrapMode.Wrap;
-            text.verticalOverflow = VerticalWrapMode.Truncate;
+            TextKit.Prepare(text, value, size, TextAnchor.MiddleCenter, Color.black, true);
             return text;
         }
 
@@ -244,16 +235,7 @@ namespace EyeGrok.Editor
             try
             {
                 BuildSettingsApplier.Apply();
-                var font = LoadTmpFont();
-                if (font != null)
-                {
-                    BuildPingScene(font);
-                    return;
-                }
-                EditorApplication.update += WaitForTmp;
-                _tmpDeadline = EditorApplication.timeSinceStartup + 90.0;
-                AssetDatabase.importPackageCompleted += OnTmpImported;
-                ImportTmpEssentials();
+                BuildPingScene();
             }
             catch (System.Exception ex)
             {
@@ -262,35 +244,7 @@ namespace EyeGrok.Editor
             }
         }
 
-        static double _tmpDeadline;
-
-        static void WaitForTmp()
-        {
-            if (EditorApplication.timeSinceStartup < _tmpDeadline) return;
-            EditorApplication.update -= WaitForTmp;
-            Debug.LogError("err=timeout tmp");
-            EditorApplication.Exit(1);
-        }
-
-        static void OnTmpImported(string packageName)
-        {
-            if (packageName != "TMP Essential Resources") return;
-            AssetDatabase.importPackageCompleted -= OnTmpImported;
-            EditorApplication.update -= WaitForTmp;
-            try
-            {
-                var font = LoadTmpFont();
-                if (font == null) throw new System.InvalidOperationException("tmp font");
-                BuildPingScene(font);
-            }
-            catch (System.Exception ex)
-            {
-                Debug.LogError("err=" + ex.GetType().Name + " " + ex.Message);
-                EditorApplication.Exit(1);
-            }
-        }
-
-        static void BuildPingScene(TMP_FontAsset font)
+        static void BuildPingScene()
         {
             Directory.CreateDirectory("Assets/EyeGrok/Scenes");
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
@@ -319,29 +273,26 @@ namespace EyeGrok.Editor
 
             var canvasGo = new GameObject("Canvas");
             var canvas = canvasGo.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             var scaler = canvasGo.AddComponent<CanvasScaler>();
-            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920f, 1080f);
-            scaler.matchWidthOrHeight = 1f;
+            TextKit.ConfigureOverlay(canvas, scaler);
             canvasGo.AddComponent<GraphicRaycaster>();
 
-            view.SetupLine = CreateTmp(canvasGo.transform, "Setup", font, 32, new Vector2(0.04f, 0.90f), new Vector2(0.96f, 0.98f));
-            view.StatusLine = CreateTmp(canvasGo.transform, "Status", font, 36, new Vector2(0.04f, 0.82f), new Vector2(0.96f, 0.90f));
-            view.TranscriptLine = CreateTmp(canvasGo.transform, "Transcript", font, 32, new Vector2(0.04f, 0.68f), new Vector2(0.96f, 0.82f));
-            view.ReplyLine = CreateReply(canvasGo.transform, font);
-            view.CancelButton = CreateLabeledButton(canvasGo.transform, "Cancel", font, new Vector2(0.04f, 0.36f), new Vector2(0.34f, 0.44f));
-            view.CheckButton = CreateLabeledButton(canvasGo.transform, "Check again", font, new Vector2(0.35f, 0.36f), new Vector2(0.65f, 0.44f));
-            view.ForgetButton = CreateHold(canvasGo.transform, "Forget setup", font, new Vector2(0.66f, 0.36f), new Vector2(0.96f, 0.44f));
+            view.SetupLine = CreateLabel(canvasGo.transform, "Setup", 32, new Vector2(0.04f, 0.90f), new Vector2(0.96f, 0.98f), Color.white, false);
+            view.StatusLine = CreateLabel(canvasGo.transform, "Status", 36, new Vector2(0.04f, 0.82f), new Vector2(0.96f, 0.90f), Color.white, false);
+            view.TranscriptLine = CreateLabel(canvasGo.transform, "Transcript", 32, new Vector2(0.04f, 0.68f), new Vector2(0.96f, 0.82f), Color.white, false);
+            view.ReplyLine = CreateReply(canvasGo.transform);
+            view.CancelButton = CreateLabeledButton(canvasGo.transform, "Cancel", new Vector2(0.04f, 0.36f), new Vector2(0.34f, 0.44f));
+            view.CheckButton = CreateLabeledButton(canvasGo.transform, "Check again", new Vector2(0.35f, 0.36f), new Vector2(0.65f, 0.44f));
+            view.ForgetButton = CreateHold(canvasGo.transform, "Forget setup", new Vector2(0.66f, 0.36f), new Vector2(0.96f, 0.44f));
             // 32% of the reference height. Pointer exit counts as release.
-            view.TalkButton = CreateHold(canvasGo.transform, "Hold to talk", font, new Vector2(0.04f, 0.02f), new Vector2(0.96f, 0.34f));
+            view.TalkButton = CreateHold(canvasGo.transform, "Hold to talk", new Vector2(0.04f, 0.02f), new Vector2(0.96f, 0.34f));
 
             var debug = new GameObject("Debug");
             debug.transform.SetParent(canvasGo.transform, false);
             Stretch(debug.AddComponent<RectTransform>(), new Vector2(0.04f, 0.44f), new Vector2(0.96f, 0.52f));
             debug.AddComponent<Image>().color = new Color(0.15f, 0.16f, 0.18f, 0.95f);
-            view.DebugInput = CreateInput(debug.transform, font);
-            view.DebugSend = CreateLabeledButton(debug.transform, "Send", font, new Vector2(0.78f, 0.1f), new Vector2(0.98f, 0.9f));
+            view.DebugInput = CreateInput(debug.transform);
+            view.DebugSend = CreateLabeledButton(debug.transform, "Send", new Vector2(0.78f, 0.1f), new Vector2(0.98f, 0.9f));
             debug.SetActive(false);
             view.DebugPanel = debug;
 
@@ -358,26 +309,7 @@ namespace EyeGrok.Editor
             EditorApplication.Exit(0);
         }
 
-        static TMP_FontAsset LoadTmpFont()
-        {
-            return AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(
-                "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset");
-        }
-
-        static void ImportTmpEssentials()
-        {
-            var package = Path.GetFullPath(Path.Combine("Packages", "com.unity.ugui", "Package Resources", "TMP Essential Resources.unitypackage"));
-            if (!File.Exists(package))
-            {
-                var caches = Directory.GetDirectories("Library/PackageCache", "com.unity.ugui@*");
-                if (caches.Length == 0) throw new System.InvalidOperationException("tmp package");
-                package = Path.Combine(caches[0], "Package Resources", "TMP Essential Resources.unitypackage");
-            }
-            if (!File.Exists(package)) throw new System.InvalidOperationException("tmp essentials");
-            AssetDatabase.ImportPackage(package, false);
-        }
-
-        static TMP_Text CreateReply(Transform parent, TMP_FontAsset font)
+        static Text CreateReply(Transform parent)
         {
             var scrollGo = new GameObject("Reply");
             scrollGo.transform.SetParent(parent, false);
@@ -404,32 +336,26 @@ namespace EyeGrok.Editor
             fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
             fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-            var text = CreateTmp(content.transform, "Reply", font, 32, Vector2.zero, Vector2.one);
-            text.alignment = TextAlignmentOptions.TopLeft;
-            text.overflowMode = TextOverflowModes.Overflow;
+            var text = CreateLabel(content.transform, "Reply", 32, Vector2.zero, Vector2.one, Color.white, false);
+            text.alignment = TextAnchor.UpperLeft;
+            text.horizontalOverflow = HorizontalWrapMode.Wrap;
+            text.verticalOverflow = VerticalWrapMode.Overflow;
             scroll.viewport = viewportRt;
             scroll.content = contentRt;
             return text;
         }
 
-        static TMP_Text CreateTmp(Transform parent, string value, TMP_FontAsset font, int size, Vector2 min, Vector2 max)
+        static Text CreateLabel(Transform parent, string value, int size, Vector2 min, Vector2 max, Color color, bool bestFit)
         {
-            var go = new GameObject(value);
+            var go = new GameObject(string.IsNullOrEmpty(value) ? "Label" : value);
             go.transform.SetParent(parent, false);
             Stretch(go.AddComponent<RectTransform>(), min, max);
-            var text = go.AddComponent<TextMeshProUGUI>();
-            text.font = font;
-            text.text = value;
-            text.fontSize = size;
-            text.color = Color.white;
-            text.alignment = TextAlignmentOptions.Center;
-            text.richText = false;
-            text.enableWordWrapping = true;
-            text.overflowMode = TextOverflowModes.Truncate;
+            var text = go.AddComponent<Text>();
+            TextKit.Prepare(text, value, size, TextAnchor.MiddleCenter, color, bestFit);
             return text;
         }
 
-        static HoldButton CreateHold(Transform parent, string label, TMP_FontAsset font, Vector2 min, Vector2 max)
+        static HoldButton CreateHold(Transform parent, string label, Vector2 min, Vector2 max)
         {
             var go = new GameObject(label);
             go.transform.SetParent(parent, false);
@@ -438,37 +364,35 @@ namespace EyeGrok.Editor
             image.color = new Color(0.93f, 0.94f, 0.96f);
             image.raycastTarget = true;
             var hold = go.AddComponent<HoldButton>();
-            var text = CreateTmp(go.transform, label, font, 40, Vector2.zero, Vector2.one);
-            text.color = Color.black;
+            var text = CreateLabel(go.transform, label, 40, Vector2.zero, Vector2.one, Color.black, true);
+            text.alignment = TextAnchor.MiddleCenter;
             return hold;
         }
 
-        static Button CreateLabeledButton(Transform parent, string label, TMP_FontAsset font, Vector2 min, Vector2 max)
+        static Button CreateLabeledButton(Transform parent, string label, Vector2 min, Vector2 max)
         {
             var go = new GameObject(label);
             go.transform.SetParent(parent, false);
             Stretch(go.AddComponent<RectTransform>(), min, max);
             go.AddComponent<Image>().color = new Color(0.75f, 0.78f, 0.82f);
             var button = go.AddComponent<Button>();
-            var text = CreateTmp(go.transform, label, font, 28, Vector2.zero, Vector2.one);
-            text.color = Color.black;
+            CreateLabel(go.transform, label, 28, Vector2.zero, Vector2.one, Color.black, true);
             return button;
         }
 
-        static TMP_InputField CreateInput(Transform parent, TMP_FontAsset font)
+        static InputField CreateInput(Transform parent)
         {
             var go = new GameObject("Debug Input");
             go.transform.SetParent(parent, false);
             Stretch(go.AddComponent<RectTransform>(), new Vector2(0.02f, 0.1f), new Vector2(0.76f, 0.9f));
             var image = go.AddComponent<Image>();
             image.color = Color.white;
-            var text = CreateTmp(go.transform, "", font, 28, new Vector2(0.02f, 0.05f), new Vector2(0.98f, 0.95f));
-            text.color = Color.black;
-            text.alignment = TextAlignmentOptions.MidlineLeft;
-            var field = go.AddComponent<TMP_InputField>();
+            var text = CreateLabel(go.transform, "", 28, new Vector2(0.02f, 0.05f), new Vector2(0.98f, 0.95f), Color.black, false);
+            text.alignment = TextAnchor.MiddleLeft;
+            text.supportRichText = false;
+            var field = go.AddComponent<InputField>();
             field.textComponent = text;
-            field.richText = false;
-            field.lineType = TMP_InputField.LineType.SingleLine;
+            field.lineType = InputField.LineType.SingleLine;
             return field;
         }
 

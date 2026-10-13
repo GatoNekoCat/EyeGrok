@@ -418,6 +418,22 @@ namespace EyeGrok.Tests
         }
 
         [Test]
+        public void T18_BuiltinFontAndEllipsis()
+        {
+            var font = TextKit.BuiltinFont();
+            Assert.NotNull(font);
+            Assert.AreEqual("LegacyRuntime", font.name);
+            Assert.AreEqual("LegacyRuntime.ttf", TextKit.BuiltinFontResource);
+            Assert.AreEqual("abcd", TextKit.Ellipsis("abcd", 4));
+            Assert.AreEqual("abc...", TextKit.Ellipsis("abcdefghij", 6));
+            var clamped = TextKit.ClampToWidth(font, "Hello EyeGrok pairing code", 32, 40);
+            Assert.IsTrue(clamped.EndsWith("..."));
+            Assert.Less(clamped.Length, "Hello EyeGrok pairing code".Length);
+            var wide = TextKit.ClampToWidth(font, "Hi", 32, 400);
+            Assert.AreEqual("Hi", wide);
+        }
+
+        [Test]
         public void T14_ReplyRichTextOffAndTruncated()
         {
             var sink = new FakeSink { RichText = true, Text = "x" };

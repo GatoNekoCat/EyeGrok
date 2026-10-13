@@ -10,7 +10,6 @@ using EyeGrok.Net;
 using EyeGrok.Ping;
 using EyeGrok.Security;
 using EyeGrok.Voice;
-using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
@@ -19,16 +18,16 @@ namespace EyeGrok.UI
 {
     public sealed class PingView : MonoBehaviour
     {
-        public TMP_Text StatusLine;
-        public TMP_Text TranscriptLine;
-        public TMP_Text ReplyLine;
-        public TMP_Text SetupLine;
+        public Text StatusLine;
+        public Text TranscriptLine;
+        public Text ReplyLine;
+        public Text SetupLine;
         public HoldButton TalkButton;
         public HoldButton ForgetButton;
         public Button CancelButton;
         public Button CheckButton;
         public GameObject DebugPanel;
-        public TMP_InputField DebugInput;
+        public InputField DebugInput;
         public Button DebugSend;
         public MicRecorder Mic;
         public WhisperStt Stt;
@@ -69,7 +68,8 @@ namespace EyeGrok.UI
             DisableRichText(TranscriptLine);
             DisableRichText(ReplyLine);
             DisableRichText(SetupLine);
-            if (DebugInput != null) DebugInput.richText = false;
+            if (DebugInput != null && DebugInput.textComponent != null)
+                DebugInput.textComponent.supportRichText = false;
             var debug = false;
 #if UNITY_EDITOR
             debug = true;
@@ -228,21 +228,21 @@ namespace EyeGrok.UI
                 hint = "Loading voice model…";
             if (StatusLine != null)
             {
-                StatusLine.richText = false;
+                StatusLine.supportRichText = false;
                 StatusLine.text = _controller.State + " — " + hint;
             }
             if (TranscriptLine != null)
             {
-                TranscriptLine.richText = false;
-                TranscriptLine.text = _controller.Transcript ?? "";
+                TranscriptLine.supportRichText = false;
+                TranscriptLine.text = TextKit.Ellipsis(_controller.Transcript ?? "", 280);
             }
             if (ReplyLine != null)
-                ReplyText.Apply(new TmpSink(ReplyLine), _controller.Reply);
+                ReplyText.Apply(new UiTextSink(ReplyLine), _controller.Reply);
         }
 
-        static void DisableRichText(TMP_Text field)
+        static void DisableRichText(Text field)
         {
-            if (field != null) field.richText = false;
+            if (field != null) field.supportRichText = false;
         }
 
         static bool AllowLoopback()
@@ -264,14 +264,14 @@ namespace EyeGrok.UI
             return Path.Combine(Application.persistentDataPath, SetupImporter.FileName);
         }
 
-        sealed class TmpSink : ITextSink
+        sealed class UiTextSink : ITextSink
         {
-            readonly TMP_Text _field;
-            public TmpSink(TMP_Text field) { _field = field; }
+            readonly Text _field;
+            public UiTextSink(Text field) { _field = field; }
             public bool RichText
             {
-                get { return _field.richText; }
-                set { _field.richText = value; }
+                get { return _field.supportRichText; }
+                set { _field.supportRichText = value; }
             }
             public string Text
             {

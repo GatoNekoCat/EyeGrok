@@ -4,7 +4,6 @@
     "references": [
         "com.whisper.unity",
         "Unity.InputSystem",
-        "Unity.TextMeshPro",
         "UnityEngine.UI",
         "UnityEngine.AudioModule",
         "UnityEngine.AndroidJNIModule",
