@@ -22,13 +22,16 @@ npx wrangler kv namespace create REPLIES
 
 Copy `wrangler.example.toml` to `wrangler.toml` (gitignored) and paste the namespace id over both `REPLACE_ME` values. `wrangler.toml` is never committed.
 
-Generate two keys (32 random bytes each, base64url) and pipe them. Do not echo them and do not write them to a file:
+Generate three keys (32 random bytes each, base64url) and pipe them. Do not echo them and do not write them to a file. `PAIR_KEY` is optional. Pairing stays off until it is set, and `/health` and `/reply` keep working either way. It must differ from the write key and the read key.
 
 ```
 # in a shell where the values are variables, not history if you can avoid it
 npx wrangler secret put WRITE_KEY
 npx wrangler secret put READ_KEY
+npx wrangler secret put PAIR_KEY
 ```
+
+`PAIR_TTL_SECONDS` is an optional var, not a secret. The Worker clamps it to 60 through 300. The default is 300. Local tests set 60 in `.dev.vars`.
 
 Deploy, then run the smoke test with `RELAY_URL`, `RELAY_WRITE_KEY`, and `RELAY_READ_KEY` set in the environment:
 
@@ -50,6 +53,9 @@ Every response sends `Cache-Control: no-store`. `/health` is `text/plain`. Every
 | `GET /health` | none | `200` `ok`. No data. If a key is missing, shorter than 32 characters, or the two keys are equal, `500` `{"error":"misconfigured"}`. The body never contains a key. |
 | `POST /reply` | `Authorization: Bearer` write key | JSON `{"nonce","text"}`. `nonce` must match `^[0-9a-f]{32}$`, otherwise `400`. `text` must be a string of 1 to 16384 UTF-8 bytes, otherwise `400` or `413`. A body over 20 KiB is `413`. On success, `REPLIES.put("r:"+nonce, text, {expirationTtl: 600})` and `204`. Overwrite is allowed. KV allows 1 write per second to the same key [F]. |
 | `GET /reply/<nonce>` | read key | A bad nonce is `400`. A hit is `200` `{"text":...}` and then a best-effort `delete` of that key. A miss is `404` `{}`. |
+| `POST /pair` | `Bearer` pair key | JSON `{"id","box"}`. `id` matches `^[A-Za-z0-9_-]{22}$`. `box` is `{"v":1,"iv","ct","mac"}` with `iv` 16 bytes, `mac` 32 bytes, and `ct` at most 4096 bytes, all base64url. A bad shape is `400`. `ct` over 4096 bytes, or a body over 8 KiB, is `413`. An existing id is `409`. Success is `201` `{}` and `put("p:"+id, box, {expirationTtl})`. The write key or the read key is `401`. Pairing off is `503` `{"error":"pairing-off"}`. |
+| `GET /pair/<id>` | none | The id is the capability. A bad id is `400`. A hit is `200` `{"box":...}` and then a best-effort `delete`. A miss is `404` `{}` and counts toward the miss limiter. More than 10 misses from one address in 60 seconds is `429` `{}` for the rest of that window. Pairing off is `503`. |
+| `DELETE /pair/<id>` | pair key | `204`, including when the id is already gone. A bad id is `400`. The wrong key is `401`. |
 | anything else | | `404` |
 
 The write key on `GET /reply/<nonce>` is `401`. A missing `Authorization` header is `401`. Keys are compared with `crypto.subtle.timingSafeEqual` on equal-length byte arrays (Workers Web Crypto). A different length is `401`.
@@ -58,7 +64,13 @@ The write key on `GET /reply/<nonce>` is `401`. A missing `Authorization` header
 
 ## Limits
 
-A ping is 1 write, at most 30 reads, and 1 delete. Free KV is 100,000 reads/day, 1,000 writes/day (different keys), 1 write/second on the same key, 1 GB storage, 512-byte keys, and 25 MiB values [F]. About 1,000 pings/day is the write cap [F]. Deletes count against the same 1,000/day write budget [F].
+A ping is 1 write, at most 30 reads, and 1 delete. A pairing is 1 put, 1 delete on read, and at most 1 `DELETE`. Free KV is 100,000 reads/day, 1,000 writes/day (different keys), 1 write/second on the same key, 1 GB storage, 512-byte keys, and 25 MiB values [F]. About 1,000 pings/day is the write cap [F]. Deletes count against the same 1,000/day write budget [F].
+
+The relay stores the pairing box as it arrived. It does not have the encryption key. A KV dump is ciphertext.
+
+The miss limiter is in memory inside one isolate. It counts `404` misses only. It does not write to KV. The Workers Rate Limiting binding is not used. The docs show the binding syntax, and they do not say the free plan includes it, so this Worker leaves it out.
+
+Single use is best effort. `GET` returns the box and deletes with `waitUntil`. Two reads in different locations can both succeed, because KV has no transactions. The entry also expires. `PAIR_TTL_SECONDS` is clamped to 60 through 300, and the default is 300. That covers the cross-location lag measured in P0-e(c).
 
 ## Consistency
 
