@@ -4,6 +4,10 @@ Cloudflare Worker. One KV key per nonce, read once, gone after 600 seconds. No r
 
 Full API, limits, and the Durable Object fallback: `docs/RELAY.md`.
 
+## Storage seam
+
+V-001 stores each reply in Workers KV. D-1 is KV, provisional, pending headset results. No Durable Object code is in this repo. `relay/src/index.js` is the KV mailbox. A later switch would replace those KV calls and keep `POST /reply` and `GET /reply/<nonce>`.
+
 Keys never go in files or chat.
 
 ## Free account setup

@@ -35,6 +35,7 @@ Host paths are not listed. Sizes are bytes.
 | P0-b empty | 35357303 | Slice 1. |
 | P0-c XR probe | 70726490 | `libopenxr_loader.so` and `libUnityOpenXR.so` present. Permissions: INTERNET, RECORD_AUDIO, `org.khronos.openxr.permission.OPENXR`, `org.khronos.openxr.permission.OPENXR_SYSTEM`. allowBackup false. usesCleartextTraffic false. Activity entry. arm64-v8a. sdk 30. target 36. |
 | P0-d flat probe | 68296869 | No `libopenxr_loader.so`. Permissions are exactly INTERNET and RECORD_AUDIO. allowBackup false. usesCleartextTraffic false. Activity entry. arm64-v8a. sdk 30. target 36. |
+| App | 69017643 | Flat ping scene. No OpenXR loader. Permissions are exactly INTERNET and RECORD_AUDIO. `EyeGrokProbe` is not in the dex. `EyeGrokKeystore` is. Model bytes 32166155. SIGNING=debug. Development player off. EditMode tests 14 passed, 0 failed. |
 
 Whisper model `ggml-tiny.en-q5_1.bin` SHA-256 `c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b`, 32166155 bytes. The hash is the Hugging Face LFS oid. whisper.unity commit `e951e4a4c6e44c781b1d36bb8dc5bf1b7bae9687` (tag 1.4.0).
 

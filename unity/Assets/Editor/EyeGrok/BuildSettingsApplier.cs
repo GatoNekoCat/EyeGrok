@@ -18,7 +18,7 @@ namespace EyeGrok.Editor
 {
     public static class BuildSettingsApplier
     {
-        public const string AppScenePath = "Assets/Scenes/SampleScene.unity";
+        public const string AppScenePath = "Assets/EyeGrok/Scenes/Ping.unity";
         public const string ProbeXrScenePath = "Assets/EyeGrok/Probes/P0c_XR.unity";
         public const string ProbeFlatScenePath = "Assets/EyeGrok/Probes/P0d_Flat.unity";
         public const string PipelinePath = "Assets/Settings/EyeGrok_URP.asset";

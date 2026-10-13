@@ -1,0 +1,22 @@
+{
+    "name": "EyeGrok.Runtime",
+    "rootNamespace": "EyeGrok",
+    "references": [
+        "com.whisper.unity",
+        "Unity.InputSystem",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI",
+        "UnityEngine.AudioModule",
+        "UnityEngine.AndroidJNIModule",
+        "UnityEngine.UnityWebRequestModule"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -3,6 +3,9 @@
 
 using System.IO;
 using EyeGrok.Probes;
+using EyeGrok.UI;
+using EyeGrok.Voice;
+using TMPro;
 using Unity.XR.CoreUtils;
 using UnityEditor;
 using UnityEditor.Events;
@@ -234,6 +237,248 @@ namespace EyeGrok.Editor
             text.horizontalOverflow = HorizontalWrapMode.Wrap;
             text.verticalOverflow = VerticalWrapMode.Truncate;
             return text;
+        }
+
+        public static void CreatePingScene()
+        {
+            try
+            {
+                BuildSettingsApplier.Apply();
+                var font = LoadTmpFont();
+                if (font != null)
+                {
+                    BuildPingScene(font);
+                    return;
+                }
+                EditorApplication.update += WaitForTmp;
+                _tmpDeadline = EditorApplication.timeSinceStartup + 90.0;
+                AssetDatabase.importPackageCompleted += OnTmpImported;
+                ImportTmpEssentials();
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError("err=" + ex.GetType().Name + " " + ex.Message);
+                EditorApplication.Exit(1);
+            }
+        }
+
+        static double _tmpDeadline;
+
+        static void WaitForTmp()
+        {
+            if (EditorApplication.timeSinceStartup < _tmpDeadline) return;
+            EditorApplication.update -= WaitForTmp;
+            Debug.LogError("err=timeout tmp");
+            EditorApplication.Exit(1);
+        }
+
+        static void OnTmpImported(string packageName)
+        {
+            if (packageName != "TMP Essential Resources") return;
+            AssetDatabase.importPackageCompleted -= OnTmpImported;
+            EditorApplication.update -= WaitForTmp;
+            try
+            {
+                var font = LoadTmpFont();
+                if (font == null) throw new System.InvalidOperationException("tmp font");
+                BuildPingScene(font);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError("err=" + ex.GetType().Name + " " + ex.Message);
+                EditorApplication.Exit(1);
+            }
+        }
+
+        static void BuildPingScene(TMP_FontAsset font)
+        {
+            Directory.CreateDirectory("Assets/EyeGrok/Scenes");
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+
+            var camGo = new GameObject("Main Camera");
+            camGo.tag = "MainCamera";
+            camGo.transform.position = new Vector3(0f, 0f, -5f);
+            var cam = camGo.AddComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.08f, 0.09f, 0.11f);
+            camGo.AddComponent<AudioListener>();
+
+            var root = new GameObject("Ping");
+            var whisper = root.AddComponent<WhisperManager>();
+            var serialized = new SerializedObject(whisper);
+            serialized.FindProperty("modelPath").stringValue = "Whisper/ggml-tiny.en-q5_1.bin";
+            serialized.FindProperty("isModelPathInStreamingAssets").boolValue = true;
+            serialized.FindProperty("initOnAwake").boolValue = false;
+            serialized.FindProperty("useGpu").boolValue = false;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            whisper.language = "en";
+            whisper.translateToEnglish = false;
+            var mic = root.AddComponent<MicRecorder>();
+            var stt = root.AddComponent<WhisperStt>();
+            var view = root.AddComponent<PingView>();
+
+            var canvasGo = new GameObject("Canvas");
+            var canvas = canvasGo.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            var scaler = canvasGo.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            scaler.matchWidthOrHeight = 1f;
+            canvasGo.AddComponent<GraphicRaycaster>();
+
+            view.SetupLine = CreateTmp(canvasGo.transform, "Setup", font, 32, new Vector2(0.04f, 0.90f), new Vector2(0.96f, 0.98f));
+            view.StatusLine = CreateTmp(canvasGo.transform, "Status", font, 36, new Vector2(0.04f, 0.82f), new Vector2(0.96f, 0.90f));
+            view.TranscriptLine = CreateTmp(canvasGo.transform, "Transcript", font, 32, new Vector2(0.04f, 0.68f), new Vector2(0.96f, 0.82f));
+            view.ReplyLine = CreateReply(canvasGo.transform, font);
+            view.CancelButton = CreateLabeledButton(canvasGo.transform, "Cancel", font, new Vector2(0.04f, 0.36f), new Vector2(0.34f, 0.44f));
+            view.CheckButton = CreateLabeledButton(canvasGo.transform, "Check again", font, new Vector2(0.35f, 0.36f), new Vector2(0.65f, 0.44f));
+            view.ForgetButton = CreateHold(canvasGo.transform, "Forget setup", font, new Vector2(0.66f, 0.36f), new Vector2(0.96f, 0.44f));
+            // 32% of the reference height. Pointer exit counts as release.
+            view.TalkButton = CreateHold(canvasGo.transform, "Hold to talk", font, new Vector2(0.04f, 0.02f), new Vector2(0.96f, 0.34f));
+
+            var debug = new GameObject("Debug");
+            debug.transform.SetParent(canvasGo.transform, false);
+            Stretch(debug.AddComponent<RectTransform>(), new Vector2(0.04f, 0.44f), new Vector2(0.96f, 0.52f));
+            debug.AddComponent<Image>().color = new Color(0.15f, 0.16f, 0.18f, 0.95f);
+            view.DebugInput = CreateInput(debug.transform, font);
+            view.DebugSend = CreateLabeledButton(debug.transform, "Send", font, new Vector2(0.78f, 0.1f), new Vector2(0.98f, 0.9f));
+            debug.SetActive(false);
+            view.DebugPanel = debug;
+
+            view.Mic = mic;
+            view.Stt = stt;
+
+            var events = new GameObject("EventSystem");
+            events.AddComponent<EventSystem>();
+            events.AddComponent<InputSystemUIInputModule>().AssignDefaultActions();
+
+            EditorSceneManager.SaveScene(scene, BuildSettingsApplier.AppScenePath);
+            AssetDatabase.SaveAssets();
+            Debug.Log("PING_SCENE=ok");
+            EditorApplication.Exit(0);
+        }
+
+        static TMP_FontAsset LoadTmpFont()
+        {
+            return AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(
+                "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset");
+        }
+
+        static void ImportTmpEssentials()
+        {
+            var package = Path.GetFullPath(Path.Combine("Packages", "com.unity.ugui", "Package Resources", "TMP Essential Resources.unitypackage"));
+            if (!File.Exists(package))
+            {
+                var caches = Directory.GetDirectories("Library/PackageCache", "com.unity.ugui@*");
+                if (caches.Length == 0) throw new System.InvalidOperationException("tmp package");
+                package = Path.Combine(caches[0], "Package Resources", "TMP Essential Resources.unitypackage");
+            }
+            if (!File.Exists(package)) throw new System.InvalidOperationException("tmp essentials");
+            AssetDatabase.ImportPackage(package, false);
+        }
+
+        static TMP_Text CreateReply(Transform parent, TMP_FontAsset font)
+        {
+            var scrollGo = new GameObject("Reply");
+            scrollGo.transform.SetParent(parent, false);
+            Stretch(scrollGo.AddComponent<RectTransform>(), new Vector2(0.04f, 0.46f), new Vector2(0.96f, 0.68f));
+            var scroll = scrollGo.AddComponent<ScrollRect>();
+            scroll.horizontal = false;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+
+            var viewport = new GameObject("Viewport");
+            viewport.transform.SetParent(scrollGo.transform, false);
+            var viewportRt = viewport.AddComponent<RectTransform>();
+            Stretch(viewportRt, Vector2.zero, Vector2.one);
+            viewport.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.06f);
+            viewport.AddComponent<Mask>().showMaskGraphic = true;
+
+            var content = new GameObject("Content");
+            content.transform.SetParent(viewport.transform, false);
+            var contentRt = content.AddComponent<RectTransform>();
+            contentRt.anchorMin = new Vector2(0f, 1f);
+            contentRt.anchorMax = new Vector2(1f, 1f);
+            contentRt.pivot = new Vector2(0.5f, 1f);
+            contentRt.sizeDelta = new Vector2(0f, 200f);
+            var fitter = content.AddComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            var text = CreateTmp(content.transform, "Reply", font, 32, Vector2.zero, Vector2.one);
+            text.alignment = TextAlignmentOptions.TopLeft;
+            text.overflowMode = TextOverflowModes.Overflow;
+            scroll.viewport = viewportRt;
+            scroll.content = contentRt;
+            return text;
+        }
+
+        static TMP_Text CreateTmp(Transform parent, string value, TMP_FontAsset font, int size, Vector2 min, Vector2 max)
+        {
+            var go = new GameObject(value);
+            go.transform.SetParent(parent, false);
+            Stretch(go.AddComponent<RectTransform>(), min, max);
+            var text = go.AddComponent<TextMeshProUGUI>();
+            text.font = font;
+            text.text = value;
+            text.fontSize = size;
+            text.color = Color.white;
+            text.alignment = TextAlignmentOptions.Center;
+            text.richText = false;
+            text.enableWordWrapping = true;
+            text.overflowMode = TextOverflowModes.Truncate;
+            return text;
+        }
+
+        static HoldButton CreateHold(Transform parent, string label, TMP_FontAsset font, Vector2 min, Vector2 max)
+        {
+            var go = new GameObject(label);
+            go.transform.SetParent(parent, false);
+            Stretch(go.AddComponent<RectTransform>(), min, max);
+            var image = go.AddComponent<Image>();
+            image.color = new Color(0.93f, 0.94f, 0.96f);
+            image.raycastTarget = true;
+            var hold = go.AddComponent<HoldButton>();
+            var text = CreateTmp(go.transform, label, font, 40, Vector2.zero, Vector2.one);
+            text.color = Color.black;
+            return hold;
+        }
+
+        static Button CreateLabeledButton(Transform parent, string label, TMP_FontAsset font, Vector2 min, Vector2 max)
+        {
+            var go = new GameObject(label);
+            go.transform.SetParent(parent, false);
+            Stretch(go.AddComponent<RectTransform>(), min, max);
+            go.AddComponent<Image>().color = new Color(0.75f, 0.78f, 0.82f);
+            var button = go.AddComponent<Button>();
+            var text = CreateTmp(go.transform, label, font, 28, Vector2.zero, Vector2.one);
+            text.color = Color.black;
+            return button;
+        }
+
+        static TMP_InputField CreateInput(Transform parent, TMP_FontAsset font)
+        {
+            var go = new GameObject("Debug Input");
+            go.transform.SetParent(parent, false);
+            Stretch(go.AddComponent<RectTransform>(), new Vector2(0.02f, 0.1f), new Vector2(0.76f, 0.9f));
+            var image = go.AddComponent<Image>();
+            image.color = Color.white;
+            var text = CreateTmp(go.transform, "", font, 28, new Vector2(0.02f, 0.05f), new Vector2(0.98f, 0.95f));
+            text.color = Color.black;
+            text.alignment = TextAlignmentOptions.MidlineLeft;
+            var field = go.AddComponent<TMP_InputField>();
+            field.textComponent = text;
+            field.richText = false;
+            field.lineType = TMP_InputField.LineType.SingleLine;
+            return field;
+        }
+
+        static void Stretch(RectTransform rt, Vector2 min, Vector2 max)
+        {
+            rt.anchorMin = min;
+            rt.anchorMax = max;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            rt.pivot = new Vector2(0.5f, 0.5f);
         }
     }
 }

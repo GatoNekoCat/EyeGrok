@@ -11,6 +11,8 @@ The format is Keep a Changelog. This project uses semantic versions. `0.1.0` is 
 - Android probe builds for the OpenXR scene and the flat scene, plus the on-device Whisper model fetch and hash pin.
 - whisper.unity pinned to commit `e951e4a4c6e44c781b1d36bb8dc5bf1b7bae9687`.
 - Headset checklist for the Frame probes in `docs/P0_RESULTS.md`.
+- Voice-first ping. Hold to talk, on-device Whisper tiny.en, transcript on screen, post to the webhook, poll the relay for up to 120 s, Check again for one more read. The typing panel is Editor and Development builds only.
+- `docs/SETUP.md` and the push-setup scripts.
 
 ### Changed
 

@@ -60,6 +60,16 @@ function Test-Uuid([string]$token) {
     return $token -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 }
 
+# License banners and YAML rulers are a run of hyphens or underscores, not a key.
+function Test-Separator([string]$token) {
+    return $token -match '^-+$' -or $token -match '^_+$'
+}
+
+# Shader Graph m_DefaultReferenceName values are TypeName plus one 32-hex id.
+function Test-UnityReferenceName([string]$token) {
+    return $token -match '^[A-Za-z][A-Za-z0-9]*_[0-9a-fA-F]{32}$'
+}
+
 # Field names like AndroidEnableArmv9SecurityFeatures. A real key is not a
 # short-digit camelCase word. At most two digits and a 5-letter lowercase run.
 function Test-CodeIdentifier([string]$token) {
@@ -122,12 +132,17 @@ foreach ($rel in $filesRaw) {
             if ($rule.Name -eq "base64url") {
                 # Stock Unity PlayerSettings placeholders, not project secrets.
                 if ($line -match '^\s*ps4(Passcode|ContentID)\s*:') { continue }
+                # Unity serialized byte arrays: font atlas and TMP tag tables.
+                if ($line -match '^\s*(m_OpeningTagArray|m_ClosingTagArray|_typelessdata)\s*:') { continue }
+                $refLine = $line.Contains('"m_DefaultReferenceName"')
                 $bad = $false
                 foreach ($m in $matches) {
                     if (Test-HexIdentifier $m.Value) { continue }
                     if (Test-Uuid $m.Value) { continue }
                     if (Test-AlphabeticIdentifier $m.Value) { continue }
                     if (Test-Bitmask $m.Value) { continue }
+                    if (Test-Separator $m.Value) { continue }
+                    if ($refLine -and (Test-UnityReferenceName $m.Value)) { continue }
                     if (Test-CodeIdentifier $m.Value) { continue }
                     $bad = $true
                     break

@@ -1,0 +1,44 @@
+# Copyright 2026 EyeGrok contributors
+# SPDX-License-Identifier: Apache-2.0
+# Pushes a setup file to the headset and restarts the app. Never prints file contents.
+
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$File
+)
+
+$ErrorActionPreference = "Stop"
+$Package = "io.github.eyegrok.ping"
+$Remote = "/sdcard/Android/data/$Package/files/eyegrok-setup.json"
+
+if (-not (Test-Path -LiteralPath $File)) {
+    Write-Error "setup file not found"
+    exit 1
+}
+
+& adb push $File $Remote
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+& adb shell am force-stop $Package
+& adb shell monkey -p $Package 1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$imported = $false
+for ($i = 0; $i -lt 20; $i++) {
+    $listing = & adb shell ls $Remote 2>&1
+    if ($LASTEXITCODE -ne 0 -or ($listing -match "No such file")) {
+        $imported = $true
+        break
+    }
+    Start-Sleep -Seconds 1
+}
+
+if ($imported) {
+    Write-Host "IMPORTED"
+    Write-Host "Delete the local setup file."
+    exit 0
+}
+
+Write-Host "NOT_IMPORTED"
+Write-Host "Delete the local setup file."
+exit 1

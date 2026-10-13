@@ -1,0 +1,6 @@
+{
+  "webhookUrl": "https://example.invalid/REPLACE_ME",
+  "webhookKey": "REPLACE_ME",
+  "relayUrl": "https://REPLACE_ME.workers.dev",
+  "relayReadKey": "REPLACE_ME"
+}
