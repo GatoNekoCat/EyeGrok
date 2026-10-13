@@ -5,7 +5,7 @@ namespace EyeGrok.Security
 {
     public interface ISecretStore
     {
-        void Put(string name, string value);
+        bool Put(string name, string value);
         bool TryGet(string name, out string value);
         void DeleteAll();
     }

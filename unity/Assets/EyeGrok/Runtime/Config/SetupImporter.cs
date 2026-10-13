@@ -57,10 +57,14 @@ namespace EyeGrok.Config
                 return outcome;
             }
 
-            store.Put("webhookUrl", data.webhookUrl);
-            store.Put("webhookKey", data.webhookKey);
-            store.Put("relayUrl", data.relayUrl);
-            store.Put("relayReadKey", data.relayReadKey);
+            if (!PutQuiet(store, "webhookUrl", data.webhookUrl)
+                || !PutQuiet(store, "webhookKey", data.webhookKey)
+                || !PutQuiet(store, "relayUrl", data.relayUrl)
+                || !PutQuiet(store, "relayReadKey", data.relayReadKey))
+            {
+                outcome.Message = "Setup save failed";
+                return outcome;
+            }
             Redactor.Register(data.webhookKey);
             Redactor.Register(data.relayReadKey);
             Redactor.Register(UrlPath(data.webhookUrl));
@@ -79,6 +83,18 @@ namespace EyeGrok.Config
             var slash = rest.IndexOf('/');
             if (slash < 0 || slash >= rest.Length - 1) return "";
             return rest.Substring(slash);
+        }
+
+        static bool PutQuiet(ISecretStore store, string name, string value)
+        {
+            try
+            {
+                return store.Put(name, value);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         static void TryDelete(string path)

@@ -25,8 +25,20 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $imported = $false
 for ($i = 0; $i -lt 20; $i++) {
-    $listing = & adb shell ls $Remote 2>&1
-    if ($LASTEXITCODE -ne 0 -or ($listing -match "No such file")) {
+    # Windows PowerShell 5.1 with ErrorActionPreference Stop turns native stderr
+    # into a terminating error. A missing file is the imported case.
+    $savedPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $listing = & adb shell ls $Remote 2>&1
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $savedPreference
+    }
+    $text = ""
+    if ($null -ne $listing) { $text = ($listing | Out-String) }
+    if ($code -ne 0 -or ($text -match "No such file")) {
         $imported = $true
         break
     }

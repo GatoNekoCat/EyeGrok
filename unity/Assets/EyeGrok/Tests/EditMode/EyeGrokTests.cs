@@ -65,6 +65,7 @@ namespace EyeGrok.Tests
     {
         public readonly List<HttpRequest> Requests = new List<HttpRequest>();
         readonly Queue<HttpResponse> _responses = new Queue<HttpResponse>();
+        public TaskCompletionSource<HttpResponse> Hold;
 
         public void Add(int status, string body, bool network)
         {
@@ -74,6 +75,14 @@ namespace EyeGrok.Tests
         public Task<HttpResponse> Send(HttpRequest request, CancellationToken ct)
         {
             Requests.Add(request);
+            if (ct.IsCancellationRequested)
+                return Task.FromCanceled<HttpResponse>(ct);
+            if (Hold != null)
+            {
+                if (ct.CanBeCanceled)
+                    ct.Register(delegate { Hold.TrySetCanceled(ct); });
+                return Hold.Task;
+            }
             if (_responses.Count == 0)
                 return Task.FromResult(new HttpResponse { Status = 0, Body = "", NetworkError = true });
             return Task.FromResult(_responses.Dequeue());
@@ -83,9 +92,21 @@ namespace EyeGrok.Tests
     public sealed class MemoryStore : ISecretStore
     {
         readonly Dictionary<string, string> _values = new Dictionary<string, string>();
-        public void Put(string name, string value) { _values[name] = value; }
+        public bool Put(string name, string value) { _values[name] = value; return true; }
         public bool TryGet(string name, out string value) { return _values.TryGetValue(name, out value); }
         public void DeleteAll() { _values.Clear(); }
+    }
+
+    public sealed class FailingStore : ISecretStore
+    {
+        public bool Throw;
+        public bool Put(string name, string value)
+        {
+            if (Throw) throw new InvalidOperationException(value);
+            return false;
+        }
+        public bool TryGet(string name, out string value) { value = null; return false; }
+        public void DeleteAll() { }
     }
 
     public sealed class FakeMic : IMic
@@ -218,6 +239,8 @@ namespace EyeGrok.Tests
                 var store = new MemoryStore();
                 var ok = SetupImporter.TryImport(okPath, store, false);
                 Assert.IsTrue(ok.Ok);
+                Assert.AreEqual("Setup imported", ok.Message);
+                Assert.IsFalse(ok.Message.Contains(FixtureValue));
                 Assert.IsFalse(File.Exists(okPath));
                 string stored;
                 Assert.IsTrue(store.TryGet("webhookKey", out stored));
@@ -404,6 +427,86 @@ namespace EyeGrok.Tests
             ReplyText.Apply(sink, "ok");
             Assert.AreEqual("ok", sink.Text);
             Assert.IsFalse(sink.RichText);
+        }
+
+        [Test]
+        public async Task T15_CancelDuringTranscribeSendsNothing()
+        {
+            var ctx = NewCtx();
+            ctx.Stt.Gate = new TaskCompletionSource<string>();
+            ctx.Controller.NotifyConfigured();
+            ctx.Controller.Press();
+            ctx.Controller.Release();
+            await Until(ctx, PingState.Transcribing);
+            ctx.Controller.Cancel();
+            ctx.Stt.Gate.TrySetResult("hello");
+            await Pump(ctx.Clock, ctx.ControllerRun(), 8);
+            Assert.AreEqual(PingState.Idle, ctx.Controller.State);
+            Assert.AreEqual(0, ctx.Http.Requests.Count);
+        }
+
+        [Test]
+        public void T16_SaveFailureIsNotImported()
+        {
+            Redactor.Clear();
+            var dir = Path.Combine(Path.GetTempPath(), "eyegrok-t16-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                AssertSaveFailure(dir, new FailingStore());
+                AssertSaveFailure(dir, new FailingStore { Throw = true });
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+                Redactor.Clear();
+            }
+        }
+
+        [Test]
+        public async Task T17_CheckAgainBlocksPttAndForgetCancels()
+        {
+            var ctx = NewCtx();
+            ctx.Controller.NotifyConfigured();
+            ctx.Controller.Press();
+            ctx.Controller.Release();
+            await Pump(ctx.Clock, ctx.ControllerRun(), 12);
+            Assert.AreEqual(PingState.Done, ctx.Controller.State);
+            var calls = ctx.Http.Requests.Count;
+            var starts = ctx.Mic.Starts;
+
+            ctx.Http.Hold = new TaskCompletionSource<HttpResponse>();
+            var check = ctx.Controller.CheckAgain();
+            Assert.IsTrue(ctx.Controller.Busy);
+            Assert.AreEqual(calls + 1, ctx.Http.Requests.Count);
+
+            ctx.Controller.Press();
+            Assert.AreEqual(starts, ctx.Mic.Starts);
+            Assert.AreEqual(PingState.Done, ctx.Controller.State);
+
+            var again = ctx.Controller.CheckAgain();
+            Assert.IsTrue(again.IsCompleted);
+            Assert.AreEqual(calls + 1, ctx.Http.Requests.Count);
+
+            ctx.Controller.Forget();
+            await Pump(ctx.Clock, check, 8);
+            Assert.AreEqual(PingState.Unconfigured, ctx.Controller.State);
+            Assert.IsFalse(ctx.Controller.Busy);
+            Assert.AreEqual(calls + 1, ctx.Http.Requests.Count);
+        }
+
+        static void AssertSaveFailure(string dir, ISecretStore store)
+        {
+            var path = Path.Combine(dir, Guid.NewGuid().ToString("N") + ".json");
+            File.WriteAllText(path, ValidJson(FixtureValue));
+            var outcome = SetupImporter.TryImport(path, store, false);
+            Assert.IsTrue(outcome.Found);
+            Assert.IsFalse(outcome.Ok);
+            Assert.AreEqual("Setup save failed", outcome.Message);
+            Assert.IsFalse(outcome.Message.Contains(FixtureValue));
+            Assert.IsFalse(outcome.Message.Contains("example.invalid"));
+            Assert.IsFalse(File.Exists(path));
+            Assert.IsTrue(Redactor.Redact(FixtureValue).Contains(FixtureValue));
         }
 
         static async Task AssertQuiet(Ctx ctx)

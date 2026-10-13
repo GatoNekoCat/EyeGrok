@@ -13,6 +13,7 @@ namespace EyeGrok.Net
     {
         public async Task<HttpResponse> Send(HttpRequest request, CancellationToken ct)
         {
+            ct.ThrowIfCancellationRequested();
             var req = new UnityWebRequest(request.Url, request.Method);
             req.timeout = request.TimeoutSeconds > 0 ? request.TimeoutSeconds : 15;
             req.downloadHandler = new DownloadHandlerBuffer();

@@ -6,4 +6,4 @@ Status: V-001 voice ping for Lepton. Bring your own Bot and relay. Install steps
 
 Unofficial; not affiliated with Cursor, xAI, or Valve.
 
-License: Apache-2.0.
+License: Apache-2.0. Third-party notices are in `THIRD_PARTY_NOTICES.md`.

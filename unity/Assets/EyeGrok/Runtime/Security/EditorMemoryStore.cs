@@ -34,9 +34,10 @@ namespace EyeGrok.Security
             Put("relayReadKey", data.relayReadKey);
         }
 
-        public void Put(string name, string value)
+        public bool Put(string name, string value)
         {
             _values[name] = value;
+            return true;
         }
 
         public bool TryGet(string name, out string value)

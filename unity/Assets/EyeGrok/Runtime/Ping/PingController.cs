@@ -28,6 +28,7 @@ namespace EyeGrok.Ping
         CancellationTokenSource _slice;
         Task _run;
         bool _releaseRequested;
+        bool _checking;
         string _nonce = "";
 
         public PingController(IMic mic, IStt stt, WebhookClient webhook, RelayClient relay, ISecretStore store, IClock clock)
@@ -53,7 +54,8 @@ namespace EyeGrok.Ping
         {
             get
             {
-                return State == PingState.Recording
+                return _checking
+                    || State == PingState.Recording
                     || State == PingState.Transcribing
                     || State == PingState.Sending
                     || State == PingState.AwaitingReply;
@@ -110,10 +112,18 @@ namespace EyeGrok.Ping
         {
             if (Busy || string.IsNullOrEmpty(_nonce)) return;
             if (State != PingState.Error && State != PingState.Done) return;
+            _checking = true;
             var ct = new CancellationTokenSource();
             _cts = ct;
-            _run = CheckOnce(ct.Token);
-            await _run;
+            try
+            {
+                _run = CheckOnce(ct.Token);
+                await _run;
+            }
+            finally
+            {
+                _checking = false;
+            }
         }
 
         public async Task SubmitText(string text)
@@ -176,6 +186,7 @@ namespace EyeGrok.Ping
                 }
                 Set(PingState.Transcribing, "Transcribing");
                 var text = await _stt.Transcribe(take.Samples, take.Rate, take.Channels, ct);
+                ct.ThrowIfCancellationRequested();
                 var len = text == null ? 0 : text.Length;
                 Debug.Log("stt len=" + len);
                 text = text == null ? "" : text.Trim();
@@ -223,6 +234,8 @@ namespace EyeGrok.Ping
             try
             {
                 var poll = await _relay.CheckAgain(_nonce, ct);
+                ct.ThrowIfCancellationRequested();
+                if (State == PingState.Unconfigured) return;
                 if (poll.Ok)
                 {
                     ShowReply(poll.Text);
@@ -237,7 +250,8 @@ namespace EyeGrok.Ping
             }
             catch (OperationCanceledException)
             {
-                Set(PingState.Idle, "Hold to talk");
+                if (State != PingState.Unconfigured)
+                    Set(PingState.Idle, "Hold to talk");
             }
         }
 

@@ -15,10 +15,11 @@ You bring your own Grok Bot webhook and your own relay. The app stores those fou
 
 ## Connect
 
-1. Plug in USB.
-2. `adb forward tcp:5555 tcp:5555`
-3. `adb connect localhost:5555`
-4. `adb devices` lists `localhost:5555`.
+1. On the Frame, turn on Developer Mode. Valve's setup page is https://partner.steamgames.com/doc/steamhardware/steamframe/setup. Exact menu names on that page are UNVERIFIED.
+2. Plug in USB.
+3. `adb forward tcp:5555 tcp:5555`
+4. `adb connect localhost:5555`
+5. `adb devices` lists `localhost:5555`.
 
 If `adb devices` is empty, start Lepton Development again, then repeat the forward and the connect.
 
@@ -56,6 +57,8 @@ Logs: `adb logcat -s Unity`. A good import does not log the URLs or the keys. Th
 ## First ping
 
 Use the pointer. No keyboard.
+
+The first hold can ask for the microphone. Lepton auto-grants that permission, so the prompt may not appear. If it does, allow the microphone and hold to talk again. A hold while the prompt is up can come back empty.
 
 1. Press and hold **Hold to talk**. Status reads `Recording — Release to send`.
 2. Speak a short English question. Hold at least half a second. Releasing outside the button also sends.

@@ -10,9 +10,9 @@ namespace EyeGrok.Security
     {
         public const string Alias = "eyegrok_v1";
 
-        public void Put(string name, string value)
+        public bool Put(string name, string value)
         {
-            WithStore((activity, store) => store.CallStatic("put", activity, Alias, name, value));
+            return WithStore((activity, store) => store.CallStatic("put", activity, Alias, name, value));
         }
 
         public bool TryGet(string name, out string value)
