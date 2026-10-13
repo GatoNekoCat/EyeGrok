@@ -10,6 +10,8 @@ namespace EyeGrok.Pair
         public const string FileName = "eyegrok-pair-origin.txt";
         public const int MaxBytes = 2048;
 
+        public static string Current { get; private set; }
+
         public static string Take(string directory)
         {
             if (string.IsNullOrEmpty(directory)) return null;
@@ -24,6 +26,7 @@ namespace EyeGrok.Pair
                 if (text.EndsWith("\n")) text = text.Substring(0, text.Length - 1);
                 if (text.Length == 0 || text.IndexOf('\n') >= 0) return null;
                 line = text;
+                Current = line;
             }
             catch (System.Exception)
             {

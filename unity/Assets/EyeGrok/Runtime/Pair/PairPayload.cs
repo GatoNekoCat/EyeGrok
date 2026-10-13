@@ -26,7 +26,8 @@ namespace EyeGrok.Pair
             var relay = parts[1];
             if (string.IsNullOrEmpty(relay) || relay.IndexOf('?') >= 0 || relay.IndexOf('#') >= 0) return false;
             if (!SetupData.IsHttpsOrLoopback(relay, allowLoopback)) return false;
-            if (TrimSlash(relay) != TrimSlash(expectedRelay)) return false;
+            var expected = TrimSlash(expectedRelay);
+            if (expected.Length != 0 && expected != TrimSlash(relay)) return false;
             var id = PairCrypto.FromB64Url(parts[2]);
             var secret = PairCrypto.FromB64Url(parts[3]);
             if (id == null || id.Length != 16) return false;

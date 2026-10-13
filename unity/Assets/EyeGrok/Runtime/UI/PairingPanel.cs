@@ -37,6 +37,7 @@ namespace EyeGrok.UI
         readonly CodePad _pad = new CodePad();
         readonly ChecklistModel _model = new ChecklistModel();
         PairingClient _client;
+        Button _ok;
 #if EYEGROK_QR
         QrScanner _scanner;
 #endif
@@ -106,8 +107,13 @@ namespace EyeGrok.UI
                 }
                 else if (name == "Backspace") button.onClick.AddListener(Backspace);
                 else if (name == "Clear") button.onClick.AddListener(ClearPad);
-                else if (name == "OK") button.onClick.AddListener(delegate { var _ = SubmitPad(); });
+                else if (name == "OK")
+                {
+                    _ok = button;
+                    button.onClick.AddListener(delegate { var _ = SubmitPad(); });
+                }
             }
+            PaintPad("");
         }
 
         void WireChecklist()
@@ -189,6 +195,7 @@ namespace EyeGrok.UI
                 PadMessage.supportRichText = false;
                 PadMessage.text = message;
             }
+            if (_ok != null) _ok.interactable = _pad.OkEnabled;
         }
 
         async Task SubmitPad()
@@ -324,6 +331,7 @@ namespace EyeGrok.UI
             string relay;
             if (View != null && View.Store != null && View.Store.TryGet("relayUrl", out relay) && !string.IsNullOrEmpty(relay))
                 return relay;
+            if (!string.IsNullOrEmpty(PendingOrigin.Current)) return PendingOrigin.Current;
             var dir = Path.GetDirectoryName(PingView.SetupPath());
             return PendingOrigin.Take(dir);
         }

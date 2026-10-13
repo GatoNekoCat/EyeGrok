@@ -1,0 +1,19 @@
+# Placeholder pairing keys used only in tests. Not credentials.
+title = "EyeGrok"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Placeholder pairing test keys"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = [
+  '''tools/test/pair-vectors\.ps1''',
+  '''tools/test-installer\.ps1''',
+  '''Tests/EditMode/PairingTests\.cs''',
+]
+regexes = [
+  '''0123456789abcdef''',
+  '''fedcba9876543210''',
+]

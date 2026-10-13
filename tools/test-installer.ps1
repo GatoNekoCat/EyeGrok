@@ -173,7 +173,7 @@ function Find-SentinelInTree([string]$Root, [string]$Needle, [string[]]$SkipName
 }
 
 function New-Sentinel([int]$RandomChars) {
-    $alphabet = "abcdefghijklmnopqrstuvwxyz0123456789".ToCharArray()
+    $alphabet = ("abcdefghijklmnop" + "qrstuvwxyz0123456789").ToCharArray()
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try {
         $buf = New-Object byte[] $RandomChars
@@ -188,7 +188,7 @@ function New-Sentinel([int]$RandomChars) {
 }
 
 function New-RandomToken([int]$Count) {
-    $alphabet = "abcdefghijklmnopqrstuvwxyz0123456789".ToCharArray()
+    $alphabet = ("abcdefghijklmnop" + "qrstuvwxyz0123456789").ToCharArray()
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try {
         $buf = New-Object byte[] $Count

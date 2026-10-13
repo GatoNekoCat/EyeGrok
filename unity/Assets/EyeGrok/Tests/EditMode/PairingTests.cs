@@ -39,6 +39,8 @@ namespace EyeGrok.Tests
             PairMaterial ok;
             Assert.IsTrue(PairPayload.TryParse(payload, "https://example.com/relay", false, out ok));
             Assert.IsTrue(PairPayload.TryParse(payload, "https://example.com/relay/", false, out ok));
+            Assert.IsTrue(PairPayload.TryParse(payload, "", false, out ok));
+            Assert.IsTrue(PairPayload.TryParse(payload, null, false, out ok));
             PairMaterial bad;
             Assert.IsFalse(PairPayload.TryParse(payload.Replace("https://", "http://"), "http://example.com/relay", false, out bad));
             Assert.IsFalse(PairPayload.TryParse("EG1|https://example.com/a|b|c|d", "https://example.com/a", false, out bad));
@@ -244,8 +246,10 @@ namespace EyeGrok.Tests
                 var path = Path.Combine(dir, PendingOrigin.FileName);
                 File.WriteAllText(path, "https://example.com/relay\n");
                 Assert.AreEqual("https://example.com/relay", PendingOrigin.Take(dir));
+                Assert.AreEqual("https://example.com/relay", PendingOrigin.Current);
                 Assert.IsFalse(File.Exists(path));
                 Assert.IsNull(PendingOrigin.Take(dir));
+                Assert.AreEqual("https://example.com/relay", PendingOrigin.Current);
 
                 File.WriteAllText(path, new string('a', 2049));
                 Assert.IsNull(PendingOrigin.Take(dir));
