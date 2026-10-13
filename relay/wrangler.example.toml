@@ -1,0 +1,14 @@
+# Copy this file to wrangler.toml. wrangler.toml is gitignored.
+# Replace REPLACE_ME with the id printed by: npx wrangler kv namespace create REPLIES
+# Do not put WRITE_KEY, READ_KEY, account ids, or real hostnames in this file.
+# Keys are created in the shell and piped to `wrangler secret put`. They are never written here.
+
+name = "eyegrok-relay"
+main = "src/index.js"
+compatibility_date = "2026-10-13"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "REPLIES"
+id = "REPLACE_ME"
+preview_id = "REPLACE_ME"

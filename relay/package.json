@@ -1,0 +1,15 @@
+{
+  "name": "eyegrok-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EyeGrok reply relay. One-shot KV mailbox between a Grok Bot routine and the app.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  }
+}
