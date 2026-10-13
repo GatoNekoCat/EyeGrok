@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using UnityEngine;
 
@@ -24,7 +26,7 @@ namespace EyeGrok.Editor
 
                 var variant = Arg("-eyegrokVariant");
                 var outPath = Arg("-eyegrokOut");
-                if (variant != "app" && variant != "probe-xr" && variant != "probe-flat")
+                if (variant != "app" && variant != "probe-xr" && variant != "probe-flat" && variant != "probe-cam")
                 {
                     Debug.LogError("variant");
                     EditorApplication.Exit(1);
@@ -39,8 +41,15 @@ namespace EyeGrok.Editor
 
                 BuildSettingsApplier.Apply();
                 BuildSettingsApplier.SetOpenXrForVariant(variant);
-                if (SetProbePlugin(variant == "probe-flat" || variant == "probe-xr", true))
+                var camera = variant == "probe-cam" || Arg("-eyegrokQr") == "on";
+                CameraBuildFlag.Write(camera);
+                var reload = SetQrDefine(camera);
+                reload = ApplyPlugin(ProbePlugin, variant == "probe-flat" || variant == "probe-xr") || reload;
+                reload = ApplyPlugin(CamProbePlugin, variant == "probe-cam") || reload;
+                reload = ApplyPlugin(ZxingPlugin, camera) || reload;
+                if (reload)
                 {
+                    AssetDatabase.SaveAssets();
                     Debug.Log("PROBE_JAVA=reload");
                     EditorApplication.Exit(2);
                     return;
@@ -89,29 +98,60 @@ namespace EyeGrok.Editor
             }
         }
 
-        // EyeGrokProbe.java is the headset probe. The app player must not compile it in.
+        // Java probes stay out of the app. ZXing is Android-enabled only when the camera flag is on.
         const string ProbePlugin = "Assets/Plugins/Android/EyeGrokProbe.java";
+        const string CamProbePlugin = "Assets/Plugins/Android/EyeGrokCamProbe.java";
+        const string ZxingPlugin = "Assets/Plugins/ZXing/zxing.dll";
 
-        static bool SetProbePlugin(bool enabled, bool reimport)
+        static bool ApplyPlugin(string path, bool enabled)
         {
-            var importer = AssetImporter.GetAtPath(ProbePlugin) as PluginImporter;
+            var importer = AssetImporter.GetAtPath(path) as PluginImporter;
             if (importer == null) return false;
-            Debug.Log(enabled ? "PROBE_JAVA=on" : "PROBE_JAVA=off");
+            Debug.Log((enabled ? "PLUGIN=on " : "PLUGIN=off ") + Path.GetFileName(path));
             if (importer.GetCompatibleWithPlatform(BuildTarget.Android) == enabled) return false;
             importer.SetCompatibleWithPlatform(BuildTarget.Android, enabled);
-            if (!reimport)
-            {
-                AssetDatabase.WriteImportSettingsIfDirty(ProbePlugin);
-                return false;
-            }
-            importer.SaveAndReimport();
+            AssetDatabase.WriteImportSettingsIfDirty(path);
             return true;
+        }
+
+        static bool SetQrDefine(bool enable)
+        {
+            PlayerSettings.GetScriptingDefineSymbols(NamedBuildTarget.Android, out var current);
+            var list = new List<string>();
+            if (current != null)
+            {
+                for (var i = 0; i < current.Length; i++)
+                {
+                    if (current[i] == "EYEGROK_QR") continue;
+                    if (current[i].Length == 0) continue;
+                    list.Add(current[i]);
+                }
+            }
+            var has = current != null && IndexOf(current, "EYEGROK_QR") >= 0;
+            if (has == enable) return false;
+            if (enable) list.Add("EYEGROK_QR");
+            PlayerSettings.SetScriptingDefineSymbols(NamedBuildTarget.Android, list.ToArray());
+            Debug.Log(enable ? "QR_DEFINE=on" : "QR_DEFINE=off");
+            return true;
+        }
+
+        static int IndexOf(string[] values, string wanted)
+        {
+            for (var i = 0; i < values.Length; i++)
+            {
+                if (values[i] == wanted) return i;
+            }
+            return -1;
         }
 
         static void RestoreSharedSettings()
         {
             BuildSettingsApplier.SetOpenXrForVariant("app");
-            SetProbePlugin(false, false);
+            ApplyPlugin(ProbePlugin, false);
+            ApplyPlugin(CamProbePlugin, false);
+            ApplyPlugin(ZxingPlugin, false);
+            SetQrDefine(false);
+            CameraBuildFlag.Write(false);
             AssetDatabase.SaveAssets();
         }
 
@@ -149,6 +189,27 @@ namespace EyeGrok.Editor
                 if (args[i] == name) return args[i + 1];
             }
             return null;
+        }
+    }
+
+    public static class CameraBuildFlag
+    {
+        public static bool Include;
+
+        public static void Write(bool on)
+        {
+            Include = on;
+            var dir = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "Library");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "EyeGrokCameraBuild.txt"), on ? "1" : "0");
+        }
+
+        public static bool Read()
+        {
+            if (Include) return true;
+            var path = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "Library", "EyeGrokCameraBuild.txt");
+            if (!File.Exists(path)) return false;
+            return File.ReadAllText(path).Trim() == "1";
         }
     }
 }

@@ -11,7 +11,8 @@ No account names, hostnames, or paths. Dates are UTC dates of the run that fille
 | P0-e smoke | PASS | Deployed worker. health 200, no-auth 401, write-key-on-read 401, bad nonce 400, oversize 413, write 204, read 200 match, re-read 404. | 2026-10-13 |
 | P0-e(a/b) | PASS | Same location, visibility after 5 negative lookups. 0.48 to 0.58 s. 5 of 5. Operator report. The plan asked for 10 trials. These 5 are what was recorded. | 2026-10-13 |
 | P0-e(c) | MEASURED | Cross location. Writer and reader in different Cloudflare locations. 1 s polling after negative lookups. Trials 28.2, 12.9, 48.4, 33.1, 17.8 s. Median 28.2 s. Max 48.4 s. Near the escalation line (median over 30 s). Two trials are over 30 s. Durable Object switch was not made. Decision pending the owner. | 2026-10-13 |
-| P0-f | NOT RUN | Live routine. Outbound POST approval is UNVERIFIED until this row is filled. | |
+| P0-f | NOT RUN | Live routine. Outbound POST approval is UNVERIFIED until this row is filled. |
+| BL-2 | APK built, headset NOT RUN | Camera probe APK 69086397 bytes. Permissions are INTERNET, RECORD_AUDIO, and CAMERA. ZXing.Net 0.16.11 is fetched, not vendored. Headset not run. | 2026-10-13 |
 
 ## Decisions
 
@@ -23,6 +24,7 @@ Each decision below is provisional, pending headset results.
 | D-2 | Mode B only | The app is the flat scene. The P0-c XR probe APK is still built. Mode A waits on the headset result. |
 | D-3 | Debug signing | No release keystore in this build. `SIGNING=debug`. |
 | D-4 | TTS deferred | Reply text only. Lepton has no Android TTS engine (P0-d logs the engine count to confirm). Piper, piper.unity, and espeak-ng are GPL-3.0 and stay out of the Apache-2.0 APK. sherpa-onnx license, size, and Unity ARM64 integration are UNVERIFIED. |
+| D-5 | CAMERA off in the app | The app does not request CAMERA until BL-2 is PASS. The probe-cam APK requests it. Default `-Qr off`. |
 
 Slice 3 may start with these rows recorded. Headset runs can still change D-1 and D-2.
 
@@ -35,7 +37,7 @@ Host paths are not listed. Sizes are bytes.
 | P0-b empty | 35357303 | Slice 1. |
 | P0-c XR probe | 70726490 | `libopenxr_loader.so` and `libUnityOpenXR.so` present. Permissions: INTERNET, RECORD_AUDIO, `org.khronos.openxr.permission.OPENXR`, `org.khronos.openxr.permission.OPENXR_SYSTEM`. allowBackup false. usesCleartextTraffic false. Activity entry. arm64-v8a. sdk 30. target 36. |
 | P0-d flat probe | 68296869 | No `libopenxr_loader.so`. Permissions are exactly INTERNET and RECORD_AUDIO. allowBackup false. usesCleartextTraffic false. Activity entry. arm64-v8a. sdk 30. target 36. |
-| App | 69017643 | Flat ping scene. No OpenXR loader. Permissions are exactly INTERNET and RECORD_AUDIO. `EyeGrokProbe` is not in the dex. `EyeGrokKeystore` is. Model bytes 32166155. SIGNING=debug. Development player off. EditMode tests 14 passed, 0 failed. |
+| App | 68363125 | Flat ping scene. No OpenXR loader. Permissions are exactly INTERNET and RECORD_AUDIO. `EyeGrokProbe`, `EyeGrokCamProbe`, and ZXing are not in the dex. `EyeGrokKeystore` is. Model bytes 32166155. SIGNING=debug. Development player off. EditMode tests 19 passed, 0 failed. |
 
 Whisper model `ggml-tiny.en-q5_1.bin` SHA-256 `c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b`, 32166155 bytes. The hash is the Hugging Face LFS oid. whisper.unity commit `e951e4a4c6e44c781b1d36bb8dc5bf1b7bae9687` (tag 1.4.0).
 
@@ -98,5 +100,21 @@ Expected screen states, pointer or controller only:
 7. Forget setup is a 3 second hold. It returns to Unconfigured.
 
 A debug typing panel exists only in Editor and Development builds. The release APK has Development Build off, so that panel is absent. The hold button, Cancel, Check again, and Forget setup must be usable with a pointer and no keyboard.
+
+### BL-2
+
+Install the camera probe APK with `adb install -r`, then launch it. On the PC, run `powershell -STA -File tools/show-test-qr.ps1` and point the headset at that window. The screen is a flat panel titled `EyeGrok P0-cam`. Tap the buttons with the pointer. No keyboard.
+
+Filter Unity logs with `adb logcat -s Unity`. Every probe line starts with `P0CAM`.
+
+1. Tap **Permission**. Log `P0CAM perm before=` and `P0CAM perm after=granted` or `denied`.
+2. Tap **WebCamTexture**. Log `P0CAM wct devices=` and either `P0CAM wct open=ok` or `P0CAM wct frames=0` or `P0CAM wct open=fail`.
+3. Tap **Camera2**. Log `P0CAM c2 ids=` and `P0CAM c2 open=ok` or `P0CAM c2 open=fail err=`.
+4. Tap **ZXing self-test**. Log `P0CAM zxing selftest=ok`. `fail` means ZXing did not decode the built-in fixture.
+5. Tap **Scan QR (20 s)** while the test QR is in view. Log `P0CAM qr=ok match=True src=wct` or `P0CAM qr=timeout`.
+
+PASS when the log contains `P0CAM RESULT=PASS`. That requires a camera frame (`wct` frames above 0, or `c2 frame=ok`) and `qr=ok match=True`.
+
+FAIL when the log contains `P0CAM RESULT=FAIL reason=perm`, `nodevice`, `noframe`, or `nodecode`. Record the reason. Do not treat an unrun headset as a pass. Whether Lepton exposes a camera to apps is UNVERIFIED until this row changes.
 
 PASS for one ping: hold, speak a short English question, release, see the transcript, see a reply at or under 120 s after send. Do this 3 times. At least 2 of 3 pass while D-1 stays KV. P0-f is still required before calling the Bot path proven, because outbound POST approval is UNVERIFIED.

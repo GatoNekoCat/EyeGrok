@@ -309,3 +309,33 @@ Source code of the package is licensed under the Unity Companion License (see ht
 
 Unless expressly provided otherwise, the software under this license is made available strictly on an “AS IS” BASIS WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. Please review the license for details on these and other terms and conditions.
 ```
+
+## Project Nayuki QR Code generator
+
+`installer/lib/QrEncoder.ps1` is a Windows PowerShell 5.1 port of Project Nayuki's QR Code generator. Byte mode, error correction M, versions 1 through 20. The port is MIT, and it also carries the EyeGrok Apache-2.0 SPDX header. No QR binary is vendored.
+
+```
+Copyright (c) Project Nayuki
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+The Software is provided "as is", without warranty of any kind, express or
+implied, including but not limited to the warranties of merchantability,
+fitness for a particular purpose and noninfringement. In no event shall the
+authors or copyright holders be liable for any claim, damages or other
+liability, whether in an action of contract, tort or otherwise, arising from,
+out of or in connection with the Software or the use or other dealings in the
+Software.
+```
+
+## ZXing.Net 0.16.11
+
+Not vendored. `tools/fetch-zxing.ps1` downloads the NuGet package and extracts `lib/netstandard2.0/zxing.dll` into a gitignored plugin folder. The package license expression is Apache-2.0. EyeGrok's `LICENSE` is the same license. The build fails if the pinned SHA-256 does not match.

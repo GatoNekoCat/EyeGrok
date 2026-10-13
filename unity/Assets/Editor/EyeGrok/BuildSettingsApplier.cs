@@ -21,6 +21,7 @@ namespace EyeGrok.Editor
         public const string AppScenePath = "Assets/EyeGrok/Scenes/Ping.unity";
         public const string ProbeXrScenePath = "Assets/EyeGrok/Probes/P0c_XR.unity";
         public const string ProbeFlatScenePath = "Assets/EyeGrok/Probes/P0d_Flat.unity";
+        public const string ProbeCamScenePath = "Assets/EyeGrok/Probes/P0cam_Flat.unity";
         public const string PipelinePath = "Assets/Settings/EyeGrok_URP.asset";
         public const string RendererPath = "Assets/Settings/EyeGrok_URP_Renderer.asset";
 
@@ -104,6 +105,8 @@ namespace EyeGrok.Editor
                     return ProbeXrScenePath;
                 case "probe-flat":
                     return ProbeFlatScenePath;
+                case "probe-cam":
+                    return ProbeCamScenePath;
                 default:
                     return null;
             }

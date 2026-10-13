@@ -118,3 +118,6 @@ InitTestScene*.unity*
 setup*.json
 !tools/setup.example.json
 /.local/
+/unity/Assets/Plugins/ZXing/
+/unity/Assets/Plugins/ZXing.meta
+/dist/

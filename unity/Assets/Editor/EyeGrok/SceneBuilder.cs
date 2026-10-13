@@ -34,6 +34,7 @@ namespace EyeGrok.Editor
                 Directory.CreateDirectory("Assets/EyeGrok/Probes");
                 CreateXrProbe();
                 CreateFlatProbe();
+                CreateCamProbe();
                 AssetDatabase.SaveAssets();
                 Debug.Log("PROBE_SCENES=ok");
                 EditorApplication.Exit(0);
@@ -149,6 +150,87 @@ namespace EyeGrok.Editor
             events.AddComponent<InputSystemUIInputModule>().AssignDefaultActions();
 
             EditorSceneManager.SaveScene(scene, BuildSettingsApplier.ProbeFlatScenePath);
+        }
+
+        public static void CreateCamProbeScene()
+        {
+            try
+            {
+                BuildSettingsApplier.Apply();
+                Directory.CreateDirectory("Assets/EyeGrok/Probes");
+                CreateCamProbe();
+                AssetDatabase.SaveAssets();
+                Debug.Log("CAM_SCENE=ok");
+                EditorApplication.Exit(0);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError("err=" + ex.GetType().Name + " " + ex.Message);
+                EditorApplication.Exit(1);
+            }
+        }
+
+        static void CreateCamProbe()
+        {
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+            var camGo = new GameObject("Main Camera");
+            camGo.tag = "MainCamera";
+            camGo.transform.position = new Vector3(0f, 0f, -5f);
+            var cam = camGo.AddComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.12f, 0.14f, 0.16f);
+            camGo.AddComponent<AudioListener>();
+
+            var probe = new GameObject("P0cam Probe").AddComponent<P0CamProbe>();
+            var fixture = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/EyeGrok/Tests/EditMode/Fixtures/qr-p0cam.txt");
+            if (fixture != null)
+            {
+                var serialized = new SerializedObject(probe);
+                serialized.FindProperty("_fixture").objectReferenceValue = fixture;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+            }
+
+            var canvasGo = new GameObject("Canvas");
+            var canvas = canvasGo.AddComponent<Canvas>();
+            var scaler = canvasGo.AddComponent<CanvasScaler>();
+            TextKit.ConfigureOverlay(canvas, scaler);
+            canvasGo.AddComponent<GraphicRaycaster>();
+
+            var panel = new GameObject("Panel");
+            panel.transform.SetParent(canvasGo.transform, false);
+            var panelRt = panel.AddComponent<RectTransform>();
+            panelRt.anchorMin = new Vector2(0.15f, 0.08f);
+            panelRt.anchorMax = new Vector2(0.85f, 0.92f);
+            panelRt.offsetMin = Vector2.zero;
+            panelRt.offsetMax = Vector2.zero;
+            var layout = panel.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = 16f;
+            layout.padding = new RectOffset(24, 24, 24, 24);
+            layout.childAlignment = TextAnchor.MiddleCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = true;
+
+            var title = CreateUiText(panel.transform, "EyeGrok P0-cam", 48);
+            title.gameObject.AddComponent<LayoutElement>().preferredHeight = 72f;
+
+            var permission = CreateUiButton(panel.transform, "Permission");
+            UnityEventTools.AddPersistentListener(permission.onClick, probe.ProbePermission);
+            var webcam = CreateUiButton(panel.transform, "WebCamTexture");
+            UnityEventTools.AddPersistentListener(webcam.onClick, probe.ProbeWebCam);
+            var camera2 = CreateUiButton(panel.transform, "Camera2");
+            UnityEventTools.AddPersistentListener(camera2.onClick, probe.ProbeCamera2);
+            var scan = CreateUiButton(panel.transform, "Scan QR (20 s)");
+            UnityEventTools.AddPersistentListener(scan.onClick, probe.ScanQr);
+            var self = CreateUiButton(panel.transform, "ZXing self-test");
+            UnityEventTools.AddPersistentListener(self.onClick, probe.SelfTest);
+
+            var events = new GameObject("EventSystem");
+            events.AddComponent<EventSystem>();
+            events.AddComponent<InputSystemUIInputModule>().AssignDefaultActions();
+
+            EditorSceneManager.SaveScene(scene, BuildSettingsApplier.ProbeCamScenePath);
         }
 
         static void CreateHand(string name, Transform parent, string hand)

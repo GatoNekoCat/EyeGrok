@@ -4,7 +4,7 @@
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("app", "probe-xr", "probe-flat")]
+    [ValidateSet("app", "probe-xr", "probe-flat", "probe-cam")]
     [string]$Variant
 )
 
@@ -48,6 +48,38 @@ function Test-EyeGrokModel {
     Write-Host "MODEL_CHECK=ok"
 }
 
+function Test-EyeGrokZxing {
+    $pinPath = Join-Path $PSScriptRoot "deps.sha256"
+    $dll = Join-Path $RepoRoot "unity\Assets\Plugins\ZXing\zxing.dll"
+    if (-not (Test-Path -LiteralPath $pinPath)) {
+        Write-Error "deps.sha256 missing"
+        exit 1
+    }
+    if (-not (Test-Path -LiteralPath $dll)) {
+        Write-Error "zxing.dll missing. Run tools/fetch-zxing.ps1"
+        exit 1
+    }
+    $expected = $null
+    foreach ($line in [System.IO.File]::ReadAllLines($pinPath)) {
+        $t = $line.Trim()
+        if ($t.Length -eq 0 -or $t.StartsWith("#")) { continue }
+        $parts = $t -split "\s+"
+        if ($parts.Length -lt 2) { continue }
+        if ($parts[$parts.Length - 1] -ne "zxing.dll") { continue }
+        if ($parts[0] -match "^[0-9a-fA-F]{64}$") { $expected = $parts[0].ToLower() }
+    }
+    if (-not $expected) {
+        Write-Error "deps.sha256 has no zxing.dll sha256"
+        exit 1
+    }
+    $actual = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLower()
+    if ($actual -ne $expected) {
+        Write-Error "zxing hash mismatch"
+        exit 1
+    }
+    Write-Host "ZXING_CHECK=ok"
+}
+
 $unity = $env:UNITY_EDITOR
 if (-not $unity) {
     $unity = "C:\Program Files\Unity\Hub\Editor\6000.3.26f1\Editor\Unity.exe"
@@ -62,11 +94,17 @@ if (-not (Test-Path -LiteralPath $Project)) {
 }
 
 Test-EyeGrokModel
+if ($Variant -eq "probe-cam") {
+    Test-EyeGrokZxing
+}
+$qr = "off"
+if ($Variant -eq "probe-cam") { $qr = "on" }
 
 $outRel = switch ($Variant) {
     "app" { "Builds\EyeGrok-v001.apk" }
     "probe-xr" { "Builds\probes\EyeGrok-p0c-xr.apk" }
     "probe-flat" { "Builds\probes\EyeGrok-p0d-flat.apk" }
+    "probe-cam" { "Builds\probes\EyeGrok-p0cam-flat.apk" }
 }
 $outPath = Join-Path $RepoRoot $outRel
 $outDir = Split-Path -Parent $outPath
@@ -78,21 +116,12 @@ $logPath = Join-Path $logDir ("unity-build-" + $Variant + ".log")
 
 Write-Host ("BUILD variant=" + $Variant)
 # Unity.exe is a GUI-subsystem binary. The call operator returns before it exits.
-$proc = Start-Process -FilePath $unity -ArgumentList @(
-    "-batchmode",
-    "-nographics",
-    "-quit",
-    "-projectPath", $Project,
-    "-buildTarget", "Android",
-    "-executeMethod", "EyeGrok.Editor.BuildScript.BuildAndroid",
-    "-eyegrokVariant", $Variant,
-    "-eyegrokOut", $outPath,
-    "-logFile", $logPath
-) -Wait -PassThru
-$code = $proc.ExitCode
-# Exit 2 means the probe plugin import changed and Unity reloaded. Run the build once more.
-if ($code -eq 2) {
-    Write-Host "BUILD retry after plugin import"
+# Exit 2 means a plugin or scripting define changed and Unity must reload. Retry up to twice.
+$code = 2
+$attempt = 0
+while ($code -eq 2 -and $attempt -lt 3) {
+    $attempt++
+    if ($attempt -gt 1) { Write-Host "BUILD retry after plugin import" }
     $proc = Start-Process -FilePath $unity -ArgumentList @(
         "-batchmode",
         "-nographics",
@@ -101,6 +130,7 @@ if ($code -eq 2) {
         "-buildTarget", "Android",
         "-executeMethod", "EyeGrok.Editor.BuildScript.BuildAndroid",
         "-eyegrokVariant", $Variant,
+        "-eyegrokQr", $qr,
         "-eyegrokOut", $outPath,
         "-logFile", $logPath
     ) -Wait -PassThru
