@@ -6,4 +6,6 @@ Status: V-001 voice ping for Lepton. Bring your own Bot and relay. Install steps
 
 Unofficial; not affiliated with Cursor, xAI, or Valve.
 
-License: Apache-2.0. Third-party notices are in `THIRD_PARTY_NOTICES.md`.
+## License
+
+Apache-2.0. Vendored TextMesh Pro Essentials (Unity Companion License; Liberation Sans OFL-1.1; EmojiOne attribution). Unity XR packages (OpenXR, XRIT, URP via manifest, Unity Companion License). Notices are in `THIRD_PARTY_NOTICES.md`.

@@ -7,7 +7,7 @@ You bring your own Grok Bot webhook and your own relay. The app stores those fou
 ## What you need
 
 - A Frame with Developer Mode on.
-- **Lepton Development** started from the Steam library on the computer. Leave it running.
+- **Lepton Development** started from the Steam library on the Frame. Leave it running.
 - A USB cable.
 - `adb` on the computer.
 - The app APK, `Builds/EyeGrok-v001.apk`, or the same file from a release.
@@ -21,7 +21,7 @@ You bring your own Grok Bot webhook and your own relay. The app stores those fou
 4. `adb connect localhost:5555`
 5. `adb devices` lists `localhost:5555`.
 
-If `adb devices` is empty, start Lepton Development again, then repeat the forward and the connect.
+If `adb devices` is empty, start Lepton Development again from the Steam library on the Frame, then repeat the forward and the connect.
 
 ## Install
 

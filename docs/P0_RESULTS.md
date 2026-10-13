@@ -46,7 +46,7 @@ Do this on the Frame. The coder does not run it.
 ### Connect
 
 1. On the headset, turn on Developer Mode.
-2. On the computer, start **Lepton Development** from the Steam library. Leave it running.
+2. On the Frame, start **Lepton Development** from the Steam library. Leave it running.
 3. Plug in USB.
 4. `adb forward tcp:5555 tcp:5555`
 5. `adb connect localhost:5555`
