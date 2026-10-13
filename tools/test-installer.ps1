@@ -3,6 +3,11 @@
 # Headless installer proof. Values stay off the command line. Transcripts saved redacted.
 
 $ErrorActionPreference = "Stop"
+function Write-Trace([string]$Msg) {
+    $line = (Get-Date).ToString("HH:mm:ss.fff") + " " + $Msg + "`r`n"
+    [System.IO.File]::AppendAllText((Join-Path $env:TEMP "eyegrok-proof-trace.txt"), $line)
+}
+Write-Trace "script-start"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Proof = Join-Path $RepoRoot ".local\proof"
 New-Item -ItemType Directory -Force -Path $Proof | Out-Null
@@ -133,40 +138,95 @@ function Remove-WorkHome([string]$Dir) {
     }
 }
 
-function Test-BytesContain([byte[]]$Hay, [byte[]]$Needle) {
-    if ($null -eq $Needle -or $Needle.Length -eq 0 -or $null -eq $Hay) { return $false }
-    if ($Hay.Length -lt $Needle.Length) { return $false }
-    for ($i = 0; $i -le ($Hay.Length - $Needle.Length); $i++) {
-        $match = $true
-        for ($j = 0; $j -lt $Needle.Length; $j++) {
-            if ($Hay[$i + $j] -ne $Needle[$j]) { $match = $false; break }
-        }
-        if ($match) { return $true }
+function Get-Latin1Encoding {
+    # Windows PowerShell 5.1 exposes Encoding.Latin1 as null. Code page 28591 is the same 1:1 byte map.
+    $latin1 = $null
+    try { $latin1 = [System.Text.Encoding]::Latin1 } catch { $latin1 = $null }
+    if ($null -eq $latin1) { $latin1 = [System.Text.Encoding]::GetEncoding(28591) }
+    return $latin1
+}
+
+function Test-SentinelFile([System.IO.FileInfo]$Info, [string[]]$Patterns, $Latin, [int64]$MaxBytes, [bool]$ApplySince, [datetime]$Since) {
+    if ($Info.Name -eq ".dev.vars") { return $false }
+    if (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+    if ($Info.Length -gt $MaxBytes) { return $false }
+    if ($ApplySince -and ($Info.LastWriteTime -lt $Since)) { return $false }
+    $bytes = $null
+    try { $bytes = [System.IO.File]::ReadAllBytes($Info.FullName) } catch { return $false }
+    if ($null -eq $bytes -or $bytes.Length -eq 0) { return $false }
+    $text = $Latin.GetString($bytes)
+    foreach ($pat in $Patterns) {
+        if ($pat.Length -gt 0 -and $text.IndexOf($pat, [System.StringComparison]::Ordinal) -ge 0) { return $true }
     }
     return $false
 }
 
 function Find-SentinelInTree([string]$Root, [string]$Needle, [string[]]$SkipNames, [datetime]$Since) {
+    if (-not $Needle) { return $null }
     if (-not (Test-Path -LiteralPath $Root)) { return $null }
+    $latin1 = Get-Latin1Encoding
     $utf8 = [System.Text.Encoding]::UTF8.GetBytes($Needle)
     $utf16 = [System.Text.Encoding]::Unicode.GetBytes($Needle)
     $b64 = [System.Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($utf8))
     $b16 = [System.Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($utf16))
-    $files = Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue
-    foreach ($file in $files) {
-        if ($Since -gt [datetime]"2000-01-01" -and $file.LastWriteTime -lt $Since) { continue }
-        $skip = $false
-        if ($file.Name -eq ".dev.vars") { $skip = $true }
-        if ($SkipNames) {
-            foreach ($name in $SkipNames) {
-                if ($file.FullName.IndexOf("\" + $name + "\") -ge 0) { $skip = $true }
-            }
+    $pats = @(
+        $latin1.GetString($utf8),
+        $latin1.GetString($utf16),
+        $latin1.GetString($b64),
+        $latin1.GetString($b16)
+    )
+    $skip = New-Object "System.Collections.Generic.HashSet[string]"
+    foreach ($name in @(".git", "Library", "node_modules", "Builds", ".wrangler", ".local", "Temp", "obj")) {
+        [void]$skip.Add($name.ToLowerInvariant())
+    }
+    if ($SkipNames) {
+        foreach ($name in $SkipNames) {
+            if ($name) { [void]$skip.Add($name.ToLowerInvariant()) }
         }
-        if ($skip) { continue }
-        $bytes = $null
-        try { $bytes = [System.IO.File]::ReadAllBytes($file.FullName) } catch { continue }
-        if ((Test-BytesContain $bytes $utf8) -or (Test-BytesContain $bytes $utf16) -or (Test-BytesContain $bytes $b64) -or (Test-BytesContain $bytes $b16)) {
-            return $file.FullName
+    }
+    $maxBytes = [int64]2MB
+    $applySince = $Since -gt ([datetime]"2000-01-01")
+    $reparse = [System.IO.FileAttributes]::ReparsePoint
+    $dirFlag = [System.IO.FileAttributes]::Directory
+    $rootAttr = [System.IO.FileAttributes]::Normal
+    try { $rootAttr = [System.IO.File]::GetAttributes($Root) } catch { return $null }
+    if (($rootAttr -band $dirFlag) -eq 0) {
+        $one = New-Object System.IO.FileInfo $Root
+        if (Test-SentinelFile $one $pats $latin1 $maxBytes $applySince $Since) { return $one.FullName }
+        return $null
+    }
+    $pending = New-Object System.Collections.Generic.Queue[string]
+    $seen = New-Object "System.Collections.Generic.HashSet[string]"
+    $pending.Enqueue($Root)
+    while ($pending.Count -gt 0) {
+        $dir = $pending.Dequeue()
+        $dirFull = $dir
+        try { $dirFull = [System.IO.Path]::GetFullPath($dir) } catch { continue }
+        $dirKey = $dirFull.ToLowerInvariant()
+        if ($seen.Contains($dirKey)) { continue }
+        [void]$seen.Add($dirKey)
+        $dirInfo = New-Object System.IO.DirectoryInfo $dirFull
+        if (-not $dirInfo.Exists) { continue }
+        try {
+            foreach ($info in $dirInfo.EnumerateFileSystemInfos()) {
+                try {
+                    $attr = $info.Attributes
+                    $isDir = ($attr -band $dirFlag) -ne 0
+                    if ($isDir) {
+                        if (($attr -band $reparse) -ne 0) { continue }
+                        if ($skip.Contains($info.Name.ToLowerInvariant())) { continue }
+                        $pending.Enqueue($info.FullName)
+                        continue
+                    }
+                    $fileInfo = $info
+                    if ($fileInfo -isnot [System.IO.FileInfo]) { $fileInfo = New-Object System.IO.FileInfo $info.FullName }
+                    if (Test-SentinelFile $fileInfo $pats $latin1 $maxBytes $applySince $Since) { return $fileInfo.FullName }
+                } catch { continue }
+            }
+        } catch [System.UnauthorizedAccessException] {
+            continue
+        } catch [System.IO.IOException] {
+            continue
         }
     }
     return $null
@@ -270,53 +330,44 @@ function Start-ProofRelay([string]$VarText) {
         if ($health.Status -eq 200 -and $health.Body.Trim() -eq "ok") { return $proc }
         Start-Sleep -Milliseconds 400
     }
-    Invoke-Silent -File "$env:SystemRoot\System32\taskkill.exe" -Arguments ("/PID " + $proc.Id + " /T /F")
+    Stop-ProofRelay $proc
     throw "relay did not answer"
+}
+
+function Stop-CmdTree([int]$CmdPid) {
+    if ($CmdPid -le 0 -or $CmdPid -eq $PID) { return }
+    Invoke-Silent -File "$env:SystemRoot\System32\taskkill.exe" -Arguments ("/PID " + $CmdPid + " /T /F")
+}
+
+function Wait-ProcExit($Proc, [int]$TimeoutMs) {
+    if ($null -eq $Proc) { return $false }
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        try { if ($Proc.HasExited) { return $true } } catch { return $false }
+        Start-Sleep -Milliseconds 200
+    }
+    try { return [bool]$Proc.HasExited } catch { return $false }
 }
 
 function Stop-ProofRelay($Proc) {
     if ($null -eq $Proc) { return }
     $id = 0
     try { $id = [int]$Proc.Id } catch { return }
-    if ($id -le 0 -or $id -eq $PID) { return }
-    $kids = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $id) -ErrorAction SilentlyContinue)
-    foreach ($kid in $kids) {
-        if ($kid.ProcessId -eq $PID) { continue }
-        try { Stop-Process -Id $kid.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
-    }
-    try { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } catch { }
+    Stop-CmdTree $id
+    [void](Wait-ProcExit $Proc 5000)
+    try { $Proc.CancelOutputRead() } catch { }
+    try { $Proc.CancelErrorRead() } catch { }
 }
 
 function Clear-RelayLocal {
     $devVars = Join-Path $RepoRoot "relay\.dev.vars"
     $state = Join-Path $RepoRoot "relay\.wrangler"
-    $self = $PID
-    $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.CommandLine -and ($_.CommandLine.IndexOf("wrangler") -ge 0 -or $_.CommandLine.IndexOf("workerd") -ge 0)
-    })
-    foreach ($proc in $procs) {
-        if ($proc.ProcessId -eq $self) { continue }
-        $parent = $proc.ParentProcessId
-        $ancestor = $false
-        $walk = $self
-        for ($n = 0; $n -lt 6; $n++) {
-            if ($walk -eq $proc.ProcessId) { $ancestor = $true; break }
-            $node = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $walk) -ErrorAction SilentlyContinue
-            if (-not $node) { break }
-            $walk = $node.ParentProcessId
-        }
-        if ($ancestor) { continue }
-        try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
-        if ($parent) {
-            Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $proc.ProcessId) -ErrorAction SilentlyContinue | ForEach-Object {
-                try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
-            }
-        }
-    }
     if (Test-Path -LiteralPath $devVars) { Remove-Item -LiteralPath $devVars -Force -ErrorAction SilentlyContinue }
-    for ($i = 0; $i -lt 10; $i++) {
+    $deadline = (Get-Date).AddSeconds(8)
+    while ((Get-Date) -lt $deadline) {
         if (-not (Test-Path -LiteralPath $state)) { break }
         Remove-Item -LiteralPath $state -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $state)) { break }
         Start-Sleep -Milliseconds 300
     }
     if (Test-Path -LiteralPath $devVars) { return $true }
@@ -355,6 +406,7 @@ try {
 } finally {
     Remove-WorkHome $licHome
 }
+Write-Trace "after i2"
 
 $dummy = Join-Path $env:TEMP ("eyegrok-dummy-" + [guid]::NewGuid().ToString("N") + ".apk")
 [System.IO.File]::WriteAllText($dummy, "dummy")
@@ -383,6 +435,7 @@ foreach ($case in $cases) {
         Remove-WorkHome $caseHome
     }
 }
+Write-Trace "after i3"
 
 function Get-CallLog([string]$WorkHome) {
     $path = Join-Path $WorkHome "fake-adb-calls.txt"
@@ -457,6 +510,7 @@ foreach ($case in $wifiCases) {
         Remove-WorkHome $caseHome
     }
 }
+Write-Trace "after wifi"
 
 $scripts = @(
     "installer\EyeGrok-Setup.ps1",
@@ -540,11 +594,13 @@ if ($deviceSkip) {
         Remove-WorkHome $fresh
     }
 }
+Write-Trace "after i1"
 
 # AT-I4 happy path, then AT-I5 and AT-I6 sentinel scans. PAIR_KEY is 32 chars so the relay accepts it.
 Import-Module (Join-Path $RepoRoot "installer\lib\Core.psm1") -Force
 . (Join-Path $RepoRoot "installer\lib\PairCrypto.ps1")
 $relayProc = $null
+$relayCmdPid = 0
 $happyHome = $null
 $stage = "AT-I4"
 $scanStart = Get-Date
@@ -562,7 +618,10 @@ try {
     $writeKey = New-RandomToken 43
     $readKey = New-RandomToken 43
     $varText = "WRITE_KEY=" + $writeKey + "`nREAD_KEY=" + $readKey + "`nPAIR_KEY=" + $pairSent + "`nPAIR_TTL_SECONDS=300`n"
+    Write-Trace "start relay"
     $relayProc = Start-ProofRelay $varText
+    try { $relayCmdPid = [int]$relayProc.Id } catch { $relayCmdPid = 0 }
+    Write-Trace ("relay pid " + $relayCmdPid)
     $happyHome = New-WorkHome "happy"
     $stdin = '{"webhookUrl":"https://example.com/' + $pathSent + '","webhookKey":"' + $hookSent + '","relayUrl":"' + $relayUrl + '","relayReadKey":"' + $readSent + '","pairKey":"' + $pairSent + '"}'
     $values = $stdin | ConvertFrom-Json
@@ -571,6 +630,7 @@ try {
         "-Headless", "-Mode", "full", "-PairMode", "all", "-CapturePairing", "-AllowLoopbackHttp", "-ApkPath", $dummy
     ) -Stdin $stdin
     Save-Proof "i4-happy.txt" ($run.Stdout + "`n" + $run.Stderr) $needles
+    Write-Trace ("happy saved code " + $run.Code)
     if ($run.Code -ne 0) { throw "happy exit" }
     if ($run.Stdout.IndexOf("`nOK") -lt 0 -and -not $run.Stdout.TrimEnd().EndsWith("OK")) { throw "happy ok" }
     $qrId = $null
@@ -598,6 +658,7 @@ try {
     }
     if ($run.Stdout.IndexOf("STDIN_SHA256=" + $expectHash) -lt 0) { throw "stdin hash" }
     [void]$notes.Add("AT-I4 PASS")
+    Write-Trace "AT-I4 pass"
     $stage = "AT-I6"
     $hit = $null
     foreach ($needle in $needles) {
@@ -608,20 +669,26 @@ try {
     }
     if ($hit) { throw ("stdio or calls " + $hit) }
     [void]$notes.Add("AT-I6 PASS")
+    Write-Trace "AT-I6 pass"
     $stage = "AT-I5"
     $wrangler = Join-Path $RepoRoot "relay\.wrangler"
     $skip = @(".git", "Library", "node_modules", "Builds", ".wrangler")
     foreach ($needle in $needles) {
+        Write-Trace "scan disk"
         if (-not $hit) { $hit = Find-SentinelInTree $happyHome $needle $null ([datetime]::MinValue) }
         if (-not $hit) { $hit = Find-SentinelInTree $wrangler $needle $null ([datetime]::MinValue) }
+        Write-Trace "scan temp"
         if (-not $hit) { $hit = Find-SentinelInTree $env:TEMP $needle $null $scanStart }
+        Write-Trace "scan repo"
         if (-not $hit) { $hit = Find-SentinelInTree $RepoRoot $needle $skip ([datetime]::MinValue) }
+        Write-Trace "scan repo done"
     }
     if ($hit) { throw ("disk " + $hit) }
     Remove-PairingEntry -RelayUrl $relayUrl -PairKey $pairSent -Id $qrB64 | Out-Null
     Remove-PairingEntry -RelayUrl $relayUrl -PairKey $pairSent -Id $codeB64 | Out-Null
+    Write-Trace "stop relay"
     Stop-ProofRelay $relayProc
-    $relayProc = $null
+    Write-Trace "clear relay"
     if (Clear-RelayLocal) { throw "cleanup" }
     if (Test-Path -LiteralPath (Join-Path $RepoRoot "relay\.dev.vars")) { throw "dev.vars remained" }
     foreach ($needle in $needles) {
@@ -637,13 +704,27 @@ try {
     [void]$notes.Add($stage + " FAIL " + $msg)
     try { Set-Content -LiteralPath (Join-Path $Proof "stage.txt") -Value ($stage + " FAIL " + $msg) -ErrorAction SilentlyContinue } catch { }
 } finally {
-    try { Stop-ProofRelay $relayProc } catch { }
+    Write-Trace "finally"
+    $cmdPid = $relayCmdPid
+    try { if ($null -ne $relayProc) { $cmdPid = [int]$relayProc.Id } } catch { }
+    if ($cmdPid -gt 0 -and $cmdPid -ne $PID) {
+        Invoke-Silent -File "$env:SystemRoot\System32\taskkill.exe" -Arguments ("/PID " + $cmdPid + " /T /F")
+    }
+    try { [void](Wait-ProcExit $relayProc 5000) } catch { }
+    try { if ($null -ne $relayProc) { $relayProc.CancelOutputRead() } } catch { }
+    try { if ($null -ne $relayProc) { $relayProc.CancelErrorRead() } } catch { }
+    $devVarsLeft = Join-Path $RepoRoot "relay\.dev.vars"
+    try {
+        if (Test-Path -LiteralPath $devVarsLeft) { Remove-Item -LiteralPath $devVarsLeft -Force -ErrorAction SilentlyContinue }
+    } catch { }
     try { Clear-RelayLocal | Out-Null } catch { }
     Remove-WorkHome $happyHome
     Remove-Item -LiteralPath $dummy -Force -ErrorAction SilentlyContinue
     Get-EventSubscriber | Where-Object { $_.SourceObject -is [System.Diagnostics.Process] } | ForEach-Object { Unregister-Event -SourceIdentifier $_.SourceIdentifier -ErrorAction SilentlyContinue }
+    try { if ($null -ne $relayProc) { $relayProc.Dispose() } } catch { }
 }
 
+Write-Trace "after finally"
 $vecScript = Join-Path $RepoRoot "tools\test\pair-vectors.ps1"
 $vecPath = Join-Path $RepoRoot "unity\Assets\EyeGrok\Tests\EditMode\Fixtures\pair-vectors.txt"
 try {
