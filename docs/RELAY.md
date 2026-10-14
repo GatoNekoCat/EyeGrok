@@ -4,9 +4,9 @@ v0.1 requires this relay. There is no shared EyeGrok relay. The human runs it on
 
 The headset posts to this relay at `POST /ping`. That call emails the bot's own Grok Bot inbox. The bot routine has an email trigger and POSTs its reply to `/reply`. The app polls this Worker with a separate read key.
 
-The Worker is one KV mailbox. It has no runtime dependencies. `wrangler` is a dev tool and is not shipped.
+The Worker is one KV mailbox. It has no runtime dependencies. `wrangler` is a dev tool and is not shipped. `POST /ping` sends one email through the `EMAIL` binding and does not read or write KV.
 
-Keys never go in files or chat. `WRITE_KEY` and `READ_KEY` are generated in the shell and piped into `wrangler secret put`. The read key is what the app stores. The write key is what the Bot routine uses. They must differ, and each must be at least 32 characters.
+Keys never go in files or chat. `WRITE_KEY`, `READ_KEY`, `PING_KEY`, and optional `PAIR_KEY` are generated in the shell and piped into `wrangler secret put`. Each is at least 32 characters. The read key is what the app stores. The write key is what the Bot routine uses. `WRITE_KEY` and `READ_KEY` must differ. `PING_KEY` is for `POST /ping` only and must differ from `WRITE_KEY` and `READ_KEY`.
 
 ## Cloudflare account
 
@@ -24,16 +24,19 @@ npx wrangler kv namespace create REPLIES
 
 Copy `wrangler.example.toml` to `wrangler.toml` (gitignored) and paste the namespace id over both `REPLACE_ME` values. `wrangler.toml` is never committed.
 
-Generate three keys (32 random bytes each, base64url) and pipe them. Do not echo them and do not write them to a file. The relay itself is required. `PAIR_KEY` is the optional secret, not the Worker. Pairing stays off until it is set, and `/health` and `/reply` keep working either way. It must differ from the write key and the read key.
+Generate `WRITE_KEY`, `READ_KEY`, `PING_KEY`, and optional `PAIR_KEY` in the shell (32 random bytes each, base64url) and pipe them. Each is at least 32 characters. Do not echo them and do not write them to a file. The relay itself is required. `PAIR_KEY` is the optional secret, not the Worker. Pairing stays off until it is set, and `/health` and `/reply` keep working either way. It must differ from the write key and the read key. `PING_KEY` is optional too. `/ping` stays off until `PING_KEY` is set, the `EMAIL` `send_email` binding is present, and `PING_FROM` is a usable sender address. `PING_KEY` must differ from `WRITE_KEY` and `READ_KEY`.
 
 ```
 # in a shell where the values are variables, not history if you can avoid it
 npx wrangler secret put WRITE_KEY
 npx wrangler secret put READ_KEY
 npx wrangler secret put PAIR_KEY
+npx wrangler secret put PING_KEY
 ```
 
 `PAIR_TTL_SECONDS` is an optional var, not a secret. The Worker clamps it to 60 through 300. The default is 300. Local tests set 60 in `.dev.vars`.
+
+`PING_FROM` is an optional var, not a secret. It is the address the `EMAIL` `send_email` binding sends from. Onboard the sender domain in Cloudflare Email Routing before that address can send. In `wrangler.toml`, set `destination_address` on the `EMAIL` binding to the Bot inbox. The example file uses placeholders only: `ping@example.invalid` and `REPLACE_ME@example.invalid`. Replace those placeholders in your local `wrangler.toml`. Do not commit the real address. The Worker leaves `to` unset, and Email Service uses `destination_address` [F].
 
 Deploy, then run the smoke test with `RELAY_URL`, `RELAY_WRITE_KEY`, and `RELAY_READ_KEY` set in the environment:
 
@@ -42,9 +45,13 @@ npx wrangler deploy
 node scripts/smoke.mjs
 ```
 
+`/ping` is covered by the local mock test `node relay/tests/smoke.mjs`.
+
 `RELAY_URL` looks like `https://REPLACE_ME.workers.dev` only as a placeholder. Use the hostname `deploy` prints. Do not commit it.
 
 Local check, no login: `npx wrangler dev` serves the Worker on localhost. Point `RELAY_URL` at that origin and use the same env vars. Local KV does not reproduce Cloudflare's cross-location delay. The deployed measurements are P0-e(a) and P0-e(b).
+
+From `relay/`, `node tests/smoke.mjs` checks `POST /ping` with a mock `EMAIL`. That run does not deploy.
 
 ## API
 
@@ -55,18 +62,19 @@ Every response sends `Cache-Control: no-store`. `/health` is `text/plain`. Every
 | `GET /health` | none | `200` `ok`. No data. If a key is missing, shorter than 32 characters, or the two keys are equal, `500` `{"error":"misconfigured"}`. The body never contains a key. |
 | `POST /reply` | `Authorization: Bearer` write key | JSON `{"nonce","text"}`. `nonce` must match `^[0-9a-f]{32}$`, otherwise `400`. `text` must be a string of 1 to 16384 UTF-8 bytes, otherwise `400` or `413`. A body over 20 KiB is `413`. On success, `REPLIES.put("r:"+nonce, text, {expirationTtl: 600})` and `204`. Overwrite is allowed. KV allows 1 write per second to the same key [F]. |
 | `GET /reply/<nonce>` | read key | A bad nonce is `400`. A hit is `200` `{"text":...}` and then a best-effort `delete` of that key. A miss is `404` `{}`. |
+| `POST /ping` | `Authorization: Bearer` `PING_KEY` | Body `{text,nonce}`. `nonce` must match `^[0-9a-f]{32}$`, otherwise `400`. `text` must be a string of 1 to 16384 UTF-8 bytes, otherwise `400` or `413`. A body over 20 KiB is `413`. Success calls `env.EMAIL.send` and returns `200` `{}`. The subject is `EyeGrok ping <nonce> <base64url>` of the text truncated to 500 UTF-8 bytes on a whole-character boundary. The email body is JSON `{"nonce","text"}` with the full text. `to` is omitted. Email Service sends to the binding's `destination_address` [F]. The sender is `PING_FROM` with the name `EyeGrok`. A missing or short `PING_KEY`, a key equal to `WRITE_KEY` or `READ_KEY`, a missing `EMAIL` binding, or a missing `PING_FROM` is `503` `{"error":"ping-off"}`. The wrong bearer is `401`. A send failure is `502` `{}`. The log line is `ping-send err=` plus the error code or name. The log never includes the text or a key. |
 | `POST /pair` | `Bearer` pair key | JSON `{"id","box"}`. `id` matches `^[A-Za-z0-9_-]{22}$`. `box` is `{"v":1,"iv","ct","mac"}` with `iv` 16 bytes, `mac` 32 bytes, and `ct` at most 4096 bytes, all base64url. A bad shape is `400`. `ct` over 4096 bytes, or a body over 8 KiB, is `413`. An existing id is `409`. Success is `201` `{}` and `put("p:"+id, box, {expirationTtl})`. The write key or the read key is `401`. Pairing off is `503` `{"error":"pairing-off"}`. |
 | `GET /pair/<id>` | none | The id is the capability. A bad id is `400`. A hit is `200` `{"box":...}` and then a best-effort `delete`. A miss is `404` `{}` and counts toward the miss limiter. More than 10 misses from one address in 60 seconds is `429` `{}` for the rest of that window. Pairing off is `503`. |
 | `DELETE /pair/<id>` | pair key | `204`, including when the id is already gone. A bad id is `400`. The wrong key is `401`. |
 | anything else | | `404` |
 
-The write key on `GET /reply/<nonce>` is `401`. A missing `Authorization` header is `401`. Keys are compared with `crypto.subtle.timingSafeEqual` on equal-length byte arrays (Workers Web Crypto). A different length is `401`.
+The write key on `GET /reply/<nonce>` is `401`. A missing `Authorization` header is `401`. Keys are compared with `crypto.subtle.timingSafeEqual` on equal-length byte arrays (Workers Web Crypto). A different length is `401`. `POST /ping` uses the same compare against `PING_KEY`.
 
 `expirationTtl` must be at least 60 seconds (Cloudflare KV write docs). This Worker uses 600.
 
 ## Limits
 
-A ping is 1 write, at most 30 reads, and 1 delete. A pairing is 1 put, 1 delete on read, and at most 1 `DELETE`. Free KV is 100,000 reads/day, 1,000 writes/day (different keys), 1 write/second on the same key, 1 GB storage, 512-byte keys, and 25 MiB values [F]. About 1,000 pings/day is the write cap [F]. Deletes count against the same 1,000/day write budget [F].
+`POST /ping` does not touch KV. It sends one email. The KV write happens at `/reply`: 1 write, at most 30 reads, and 1 delete. A pairing is 1 put, 1 delete on read, and at most 1 `DELETE`. Free KV is 100,000 reads/day, 1,000 writes/day (different keys), 1 write/second on the same key, 1 GB storage, 512-byte keys, and 25 MiB values [F]. About 1,000 pings/day is the write cap [F]. Deletes count against the same 1,000/day write budget [F].
 
 The relay stores the pairing box as it arrived. It does not have the encryption key. A KV dump is ciphertext.
 

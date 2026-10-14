@@ -3,6 +3,7 @@
 
 // Reply mailbox. WRITE_KEY posts a nonce's text. READ_KEY reads it once.
 // Pairing stores ciphertext only. PAIR_KEY is optional and never affects /health or /reply.
+// POST /ping sends one email through the EMAIL binding. It does not touch KV or the miss limiter.
 // KV expirationTtl minimum is 60 seconds (Cloudflare KV put docs). Replies use 600. Pairs use 60-300.
 
 const MAX_BODY_BYTES = 20 * 1024;
@@ -241,6 +242,72 @@ async function deletePair(request, env, pairKey, id) {
   return json(204, {});
 }
 
+// Walk back continuation bytes so the cut stays on a UTF-8 character boundary.
+function subjectText(text) {
+  let bytes = new TextEncoder().encode(text);
+  if (bytes.byteLength > 500) {
+    let end = 500;
+    while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+    bytes = bytes.slice(0, end);
+  }
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function pingFromOrEmpty(env) {
+  const from = typeof env.PING_FROM === "string" ? env.PING_FROM : "";
+  if (from.length < 3 || from.indexOf("@") < 1) return "";
+  return from;
+}
+
+async function postPing(request, env) {
+  const pingKey = typeof env.PING_KEY === "string" ? env.PING_KEY : "";
+  if (pingKey.length < 32 || pingKey === env.WRITE_KEY || pingKey === env.READ_KEY) {
+    return json(503, { error: "ping-off" });
+  }
+  if (!env.EMAIL) return json(503, { error: "ping-off" });
+  const from = pingFromOrEmpty(env);
+  if (!from) return json(503, { error: "ping-off" });
+  if (!timingSafeEqualString(presentedToken(request), pingKey)) return json(401, {});
+
+  const declared = request.headers.get("content-length");
+  if (declared !== null && declared !== "" && Number(declared) > MAX_BODY_BYTES) {
+    return json(413, {});
+  }
+
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength > MAX_BODY_BYTES) return json(413, {});
+
+  let body;
+  try {
+    body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buf));
+  } catch (err) {
+    return json(400, {});
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return json(400, {});
+  if (typeof body.nonce !== "string" || !NONCE_RE.test(body.nonce)) return json(400, {});
+  if (typeof body.text !== "string") return json(400, {});
+
+  const textBytes = new TextEncoder().encode(body.text).byteLength;
+  if (textBytes < 1) return json(400, {});
+  if (textBytes > MAX_TEXT_BYTES) return json(413, {});
+
+  try {
+    // Leave `to` unset. Email Service uses the binding's destination_address.
+    await env.EMAIL.send({
+      from: { email: from, name: "EyeGrok" },
+      subject: "EyeGrok ping " + body.nonce + " " + subjectText(body.text),
+      text: JSON.stringify({ nonce: body.nonce, text: body.text }),
+    });
+  } catch (err) {
+    const code = err && err.code ? err.code : (err && err.name) || "Error";
+    console.log("ping-send err=" + code);
+    return json(502, {});
+  }
+  return json(200, {});
+}
+
 export default {
   async fetch(request, env, ctx) {
     try {
@@ -252,6 +319,8 @@ export default {
       if (request.method === "GET" && path === "/health") {
         return plain(200, "ok", "text/plain; charset=utf-8");
       }
+
+      if (request.method === "POST" && path === "/ping") return await postPing(request, env);
 
       if (request.method === "POST" && path === "/reply") {
         if (!timingSafeEqualString(presentedToken(request), keys.writeKey)) return json(401, {});

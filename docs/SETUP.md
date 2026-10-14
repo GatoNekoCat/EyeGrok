@@ -2,7 +2,7 @@
 
 EyeGrok on a Steam Frame is a flat app. You hold a button, speak, and read the reply. v0.1 requires a self-hosted relay. The headset posts to the relay `POST /ping`. That call emails the bot's own Grok Bot inbox. The bot routine has an email trigger and POSTs its reply to `/reply`. The app stores the four setup values in the Android Keystore.
 
-Before you start: set up the relay. It is required. See docs/RELAY.md. QR or code pairing also needs PAIR_KEY. USB push does not.
+Before you start: set up the relay. It is required. Set `PING_KEY` and the email binding per docs/RELAY.md. QR or code pairing also needs PAIR_KEY. USB push does not.
 
 1. Turn on Developer Mode on the Frame.
 2. Start Lepton Development from the Steam Library on the Frame.

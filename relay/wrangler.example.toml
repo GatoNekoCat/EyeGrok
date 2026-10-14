@@ -20,3 +20,17 @@ preview_id = "REPLACE_ME"
 # The Workers Rate Limiting binding is not configured here. Free-plan availability was not confirmed
 # (Cloudflare documents the binding syntax, not that the free plan includes it). The Worker uses an
 # in-memory per-isolate miss limiter instead.
+
+# PING_KEY is a secret. Generate it in the shell and pipe it to `npx wrangler secret put PING_KEY`.
+# It must be at least 32 characters and different from WRITE_KEY and READ_KEY.
+# /ping returns 503 until PING_KEY is set. /health and /reply do not use it.
+# PING_FROM is the sender on a domain onboarded to Email Service. It is a var, not a secret.
+# destination_address is the only recipient. The Worker leaves `to` unset so this address is used.
+# Replace both placeholders. Do not put a real hostname here.
+
+[vars]
+PING_FROM = "ping@example.invalid"
+
+[[send_email]]
+name = "EMAIL"
+destination_address = "REPLACE_ME@example.invalid"
