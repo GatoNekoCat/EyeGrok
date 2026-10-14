@@ -2,7 +2,7 @@
 
 v0.1 requires this relay. There is no shared EyeGrok relay. The human runs it on their own free Cloudflare account.
 
-EyeGrok does not receive the Bot's reply on the webhook response. A webhook `200` means the Bot accepted the call and started a run. It does not mean the run finished [F]. The routine posts the reply to this Worker. The app polls the Worker with a separate read key.
+The headset posts to this relay at `POST /ping`. That call emails the bot's own Grok Bot inbox. The bot routine has an email trigger and POSTs its reply to `/reply`. The app polls this Worker with a separate read key.
 
 The Worker is one KV mailbox. It has no runtime dependencies. `wrangler` is a dev tool and is not shipped.
 

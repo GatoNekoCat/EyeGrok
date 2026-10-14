@@ -24,7 +24,7 @@ The script prints `STEP tools`, `STEP frame`, and `STEP install` first. It print
 {"webhookUrl":"https://REPLACE_ME","webhookKey":"REPLACE_ME","relayUrl":"https://REPLACE_ME","relayReadKey":"REPLACE_ME"}
 ```
 
-Those four names are the fields `Test-SetupValues` checks. Both URLs must start with `https://`. This command does not pass `-AllowLoopbackHttp`, so an `http://` address is rejected. `webhookKey` and `relayReadKey` must be 16 to 512 characters with no whitespace. The relay rejects a read key shorter than 32 characters, and the read key must differ from the write key. The write key is not in this line. It stays with the Bot. `webhookUrl` is `https://<your relay>/ping`. `webhookKey` is `PING_KEY`.
+Those four names are the fields `Test-SetupValues` checks. Both URLs must start with `https://`. This command does not pass `-AllowLoopbackHttp`, so an `http://` address is rejected. All keys (`webhookKey`, which is `PING_KEY`, and the relay read key) must be at least 32 characters, with no whitespace. `PING_KEY` must differ from `WRITE_KEY` and `READ_KEY`. The write key is not in this line. It stays with the Bot. `webhookUrl` is `https://<your relay>/ping`. `webhookKey` is `PING_KEY`.
 
 `pairKey` is not in this line. `-PairMode usb` does not post a pairing box and does not require `pairKey`.
 

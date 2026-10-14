@@ -1,6 +1,6 @@
 # EyeGrok relay
 
-EyeGrok v0.1 requires this Worker. The app does not read the reply on the webhook response.
+EyeGrok v0.1 requires this Worker. The headset posts to `POST /ping`, which emails the bot's own Grok Bot inbox. The bot routine has an email trigger and POSTs its reply to `/reply`.
 
 Cloudflare Worker. One KV key per nonce, read once, gone after 600 seconds. No runtime dependencies. `wrangler` (see `package.json`) is a dev tool and is not part of the APK. Its license is UNVERIFIED and it is not redistributed.
 
