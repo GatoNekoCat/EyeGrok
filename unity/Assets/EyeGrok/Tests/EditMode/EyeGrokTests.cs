@@ -77,15 +77,20 @@ namespace EyeGrok.Tests
             Requests.Add(request);
             if (ct.IsCancellationRequested)
                 return Task.FromCanceled<HttpResponse>(ct);
+            if (request.OnWireSend != null) request.OnWireSend();
             if (Hold != null)
             {
                 if (ct.CanBeCanceled)
                     ct.Register(delegate { Hold.TrySetCanceled(ct); });
                 return Hold.Task;
             }
+            HttpResponse response;
             if (_responses.Count == 0)
-                return Task.FromResult(new HttpResponse { Status = 0, Body = "", NetworkError = true });
-            return Task.FromResult(_responses.Dequeue());
+                response = new HttpResponse { Status = 0, Body = "", NetworkError = true };
+            else
+                response = _responses.Dequeue();
+            if (request.OnWireDone != null) request.OnWireDone();
+            return Task.FromResult(response);
         }
     }
 
@@ -281,22 +286,25 @@ namespace EyeGrok.Tests
             await Pump(clock, task, 10);
             Assert.IsTrue(task.Result.Ok);
             Assert.AreEqual("four", task.Result.Text);
-            Assert.AreEqual(5f, clock.Delays[0]);
-            Assert.AreEqual(4f, clock.Delays[1]);
-            Assert.AreEqual(4f, clock.Delays[2]);
+            Assert.AreEqual(2f, clock.Delays[0]);
+            Assert.AreEqual(1f, clock.Delays[1]);
+            Assert.AreEqual(1f, clock.Delays[2]);
             Assert.LessOrEqual(task.Result.Requests, RelayClient.MaxRequests);
+            Assert.AreEqual(2f, RelayClient.FirstDelaySeconds);
+            Assert.AreEqual(1f, RelayClient.IntervalSeconds);
+            Assert.AreEqual(125, RelayClient.MaxRequests);
             Assert.AreEqual(120f, RelayClient.DeadlineSeconds);
 
             var clock2 = new ManualClock();
             var http2 = new FakeTransport();
-            for (var i = 0; i < 40; i++) http2.Add(404, "{}", false);
+            for (var i = 0; i < 140; i++) http2.Add(404, "{}", false);
             var relay2 = new RelayClient(http2, Store(), clock2);
             var deadline = relay2.Poll(NonceHex, CancellationToken.None);
-            await Pump(clock2, deadline, 80);
+            await Pump(clock2, deadline, 160);
             Assert.IsFalse(deadline.Result.Ok);
             StringAssert.Contains("120", deadline.Result.Error);
-            Assert.LessOrEqual(deadline.Result.Requests, 30);
-            Assert.GreaterOrEqual(deadline.Result.Requests, 20);
+            Assert.GreaterOrEqual(deadline.Result.Requests, 100);
+            Assert.Less(deadline.Result.Requests, RelayClient.MaxRequests);
             Assert.GreaterOrEqual(clock2.Now, 100f);
             Assert.LessOrEqual(clock2.Now, 120f);
         }
@@ -316,13 +324,15 @@ namespace EyeGrok.Tests
 
             var clock2 = new ManualClock();
             var http2 = new FakeTransport();
-            for (var i = 0; i < 6; i++) http2.Add(503, "{}", false);
+            for (var i = 0; i < 8; i++) http2.Add(503, "{}", false);
             var task2 = new RelayClient(http2, Store(), clock2).Poll(NonceHex, CancellationToken.None);
-            await Pump(clock2, task2, 4);
-            Assert.AreEqual(5f, clock2.Delays[0]);
-            Assert.AreEqual(8f, clock2.Delays[1]);
-            Assert.AreEqual(16f, clock2.Delays[2]);
-            Assert.AreEqual(16f, clock2.Delays[3]);
+            await Pump(clock2, task2, 5);
+            Assert.AreEqual(2f, clock2.Delays[0]);
+            Assert.AreEqual(2f, clock2.Delays[1]);
+            Assert.AreEqual(4f, clock2.Delays[2]);
+            Assert.AreEqual(8f, clock2.Delays[3]);
+            Assert.AreEqual(16f, clock2.Delays[4]);
+            Assert.AreEqual(16f, clock2.Delays[5]);
         }
 
         [Test]
@@ -372,6 +382,10 @@ namespace EyeGrok.Tests
             cancel.Controller.Press();
             cancel.Controller.Release();
             await Until(cancel, PingState.AwaitingReply);
+            Assert.AreEqual("Delivered, thinking 0 s", cancel.Controller.Hint);
+            cancel.Clock.Advance(2.2f);
+            cancel.Controller.RefreshThinkingHint();
+            Assert.AreEqual("Delivered, thinking 2 s", cancel.Controller.Hint);
             var calls = cancel.Http.Requests.Count;
             cancel.Controller.Cancel();
             await Pump(cancel.Clock, cancel.ControllerRun(), 6);

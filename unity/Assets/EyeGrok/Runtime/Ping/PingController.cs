@@ -30,6 +30,8 @@ namespace EyeGrok.Ping
         bool _releaseRequested;
         bool _checking;
         string _nonce = "";
+        PingTrace _trace;
+        float _sentAt = -1f;
 
         public PingController(IMic mic, IStt stt, WebhookClient webhook, RelayClient relay, ISecretStore store, IClock clock)
         {
@@ -49,6 +51,7 @@ namespace EyeGrok.Ping
         public string Reply { get; private set; }
         public string NoncePrefix { get; private set; }
         public event Action Changed;
+        public event Action ReplyArrived;
 
         public bool Busy
         {
@@ -89,6 +92,8 @@ namespace EyeGrok.Ping
             }
             _releaseRequested = false;
             _cts = new CancellationTokenSource();
+            BeginTrace();
+            _trace.MarkPttDown();
             _mic.StartRecording();
             Set(PingState.Recording, "Release to send");
             _run = RecordLoop(_cts.Token);
@@ -97,6 +102,7 @@ namespace EyeGrok.Ping
         public void Release()
         {
             if (State != PingState.Recording) return;
+            if (_trace != null) _trace.MarkPttUp();
             _releaseRequested = true;
             if (_slice != null) _slice.Cancel();
         }
@@ -137,10 +143,26 @@ namespace EyeGrok.Ping
             await _run;
         }
 
+        public void RefreshThinkingHint()
+        {
+            if (State != PingState.AwaitingReply) return;
+            var hint = ThinkingHint();
+            if (hint == Hint) return;
+            Hint = hint;
+            var handler = Changed;
+            if (handler != null) handler();
+        }
+
+        public void MarkRendered()
+        {
+            if (_trace != null) _trace.MarkRender();
+        }
+
         public void Forget()
         {
             if (_cts != null) _cts.Cancel();
             if (_slice != null) _slice.Cancel();
+            FlushTrace("cancel");
             if (_store != null) _store.DeleteAll();
             Redactor.Clear();
             _nonce = "";
@@ -183,13 +205,16 @@ namespace EyeGrok.Ping
                 if (ct.IsCancellationRequested)
                 {
                     SafeStop();
+                    FlushTrace("cancel");
                     Set(PingState.Idle, "Hold to talk");
                     return;
                 }
                 var take = SafeStop();
+                if (_trace != null) _trace.MarkSttStart();
                 var seconds = take != null ? take.Seconds : 0f;
                 if (seconds < MinRecordSeconds)
                 {
+                    FlushTrace("error:short");
                     Set(PingState.Idle, "Too short");
                     return;
                 }
@@ -197,10 +222,12 @@ namespace EyeGrok.Ping
                 var text = await _stt.Transcribe(take.Samples, take.Rate, take.Channels, ct);
                 ct.ThrowIfCancellationRequested();
                 var len = text == null ? 0 : text.Length;
+                if (_trace != null) _trace.MarkSttDone(len);
                 Debug.Log("stt len=" + len);
                 text = text == null ? "" : text.Trim();
                 if (text.Length == 0 || text.IndexOf("[BLANK_AUDIO]", StringComparison.Ordinal) >= 0)
                 {
+                    FlushTrace("error:blank");
                     Set(PingState.Error, "Didn't catch that");
                     return;
                 }
@@ -209,6 +236,7 @@ namespace EyeGrok.Ping
             catch (OperationCanceledException)
             {
                 SafeStop();
+                FlushTrace("cancel");
                 if (State != PingState.Unconfigured)
                     Set(PingState.Idle, "Hold to talk");
             }
@@ -216,26 +244,39 @@ namespace EyeGrok.Ping
 
         async Task SendTranscript(string text, CancellationToken ct)
         {
-            Transcript = text;
-            Set(PingState.Sending, "Sending");
-            var nonce = Nonce.New();
-            _nonce = nonce;
-            NoncePrefix = nonce.Substring(0, 6);
-            Debug.Log("nonce=" + NoncePrefix);
-            var hook = await _webhook.Send(text, nonce, ct);
-            if (!hook.Ok)
+            try
             {
-                Set(PingState.Error, hook.Error);
-                return;
+                Transcript = text;
+                Set(PingState.Sending, "Sending");
+                var nonce = Nonce.New();
+                _nonce = nonce;
+                NoncePrefix = nonce.Substring(0, 6);
+                if (_trace == null) BeginTrace();
+                _trace.SetTid(nonce);
+                Debug.Log("nonce=" + NoncePrefix);
+                var hook = await _webhook.Send(text, nonce, ct);
+                if (!hook.Ok)
+                {
+                    FlushTrace("error:" + (hook.Error ?? "webhook"));
+                    Set(PingState.Error, hook.Error);
+                    return;
+                }
+                _sentAt = _clock.Now;
+                Set(PingState.AwaitingReply, ThinkingHint());
+                var poll = await _relay.Poll(nonce, ct);
+                if (poll.Ok)
+                {
+                    ShowReply(poll.Text);
+                    return;
+                }
+                FlushTrace(PollOutcome(poll.Error));
+                Set(PingState.Error, poll.Error);
             }
-            Set(PingState.AwaitingReply, "Waiting for reply");
-            var poll = await _relay.Poll(nonce, ct);
-            if (poll.Ok)
+            catch (OperationCanceledException)
             {
-                ShowReply(poll.Text);
-                return;
+                FlushTrace("cancel");
+                throw;
             }
-            Set(PingState.Error, poll.Error);
         }
 
         async Task CheckOnce(CancellationToken ct)
@@ -269,7 +310,48 @@ namespace EyeGrok.Ping
             var len = text == null ? 0 : text.Length;
             Debug.Log("reply len=" + len);
             Reply = ReplyText.Clamp(text);
+            if (_trace != null) _trace.NoteReplyLen(len);
             Set(PingState.Done, "Done");
+            var arrived = ReplyArrived;
+            if (arrived != null) arrived();
+            FlushTrace("ok");
+        }
+
+        void BeginTrace()
+        {
+            _trace = new PingTrace();
+            if (_webhook != null) _webhook.Trace = _trace;
+            if (_relay != null) _relay.Trace = _trace;
+        }
+
+        void FlushTrace(string outcome)
+        {
+            var trace = _trace;
+            _trace = null;
+            if (_webhook != null) _webhook.Trace = null;
+            if (_relay != null) _relay.Trace = null;
+            if (trace != null) trace.Flush(outcome);
+        }
+
+        string ThinkingHint()
+        {
+            return "Delivered, thinking " + ThinkingSeconds() + " s";
+        }
+
+        int ThinkingSeconds()
+        {
+            if (_sentAt < 0f) return 0;
+            var elapsed = _clock.Now - _sentAt;
+            if (elapsed < 0f) return 0;
+            if (elapsed > 9999f) return 9999;
+            return (int)elapsed;
+        }
+
+        static string PollOutcome(string error)
+        {
+            if (string.IsNullOrEmpty(error)) return "error:relay";
+            if (error.IndexOf("120", StringComparison.Ordinal) >= 0) return "timeout";
+            return "error:" + error;
         }
 
         MicTake SafeStop()

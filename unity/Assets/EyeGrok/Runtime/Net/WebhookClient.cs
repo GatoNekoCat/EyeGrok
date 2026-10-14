@@ -1,6 +1,7 @@
 // Copyright 2026 EyeGrok contributors
 // SPDX-License-Identifier: Apache-2.0
 
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using EyeGrok.Security;
@@ -18,6 +19,8 @@ namespace EyeGrok.Net
         readonly IHttpTransport _transport;
         readonly ISecretStore _store;
 
+        public PingTrace Trace;
+
         public WebhookClient(IHttpTransport transport, ISecretStore store)
         {
             _transport = transport;
@@ -30,6 +33,7 @@ namespace EyeGrok.Net
             string key;
             if (!_store.TryGet("webhookUrl", out url) || !_store.TryGet("webhookKey", out key))
                 return Fail("webhook 0");
+            var trace = Trace;
             var response = await _transport.Send(new HttpRequest
             {
                 Method = "POST",
@@ -37,8 +41,11 @@ namespace EyeGrok.Net
                 Body = JsonBody.TextAndNonce(text, nonce),
                 Authorization = "Bearer " + key,
                 ContentType = "application/json",
-                TimeoutSeconds = 15
+                TimeoutSeconds = 15,
+                OnWireSend = trace == null ? null : (Action)trace.MarkPostSent,
+                OnWireDone = trace == null ? null : (Action)trace.MarkPostAck
             }, ct);
+            if (trace != null) trace.NotePost(response.Status, response.Body);
             if (response.NetworkError || response.Status == 0)
                 return Fail("webhook 0");
             if (response.Status == 200)

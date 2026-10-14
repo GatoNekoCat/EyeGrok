@@ -55,7 +55,17 @@ function makeEnv(overrides) {
   return { env, sent };
 }
 
-async function call(env, { token = PING_KEY, body = null, raw = null } = {}) {
+function withColo(req, colo) {
+  if (!colo) return req;
+  try {
+    Object.defineProperty(req, "cf", { configurable: true, value: { colo: colo } });
+  } catch (err) {
+    // Some Request implementations seal cf. The Worker then reports colo as "".
+  }
+  return req;
+}
+
+async function call(env, { token = PING_KEY, body = null, raw = null, colo = "" } = {}) {
   const headers = {};
   if (token) headers.Authorization = "Bearer " + token;
   let payload;
@@ -73,7 +83,7 @@ async function call(env, { token = PING_KEY, body = null, raw = null } = {}) {
   };
   try {
     const res = await worker.fetch(
-      new Request("https://relay.test/ping", { method: "POST", headers, body: payload }),
+      withColo(new Request("https://relay.test/ping", { method: "POST", headers, body: payload }), colo),
       env,
       { waitUntil() {} }
     );
@@ -82,6 +92,75 @@ async function call(env, { token = PING_KEY, body = null, raw = null } = {}) {
   } finally {
     console.log = prev;
   }
+}
+
+function memoryReplies() {
+  const map = new Map();
+  return {
+    map,
+    async get(key) {
+      return map.has(key) ? map.get(key) : null;
+    },
+    async put(key, value) {
+      map.set(key, value);
+    },
+    async delete(key) {
+      map.delete(key);
+    },
+  };
+}
+
+async function callAt(env, url, { method = "GET", token = "", body = null, contentType = "", colo = "" } = {}) {
+  const headers = {};
+  if (token) headers.Authorization = "Bearer " + token;
+  if (contentType) headers["Content-Type"] = contentType;
+  const init = { method, headers };
+  if (body !== null) init.body = body;
+  const logs = [];
+  const prev = console.log;
+  console.log = (...args) => {
+    logs.push(args.map(String).join(" "));
+  };
+  try {
+    const res = await worker.fetch(withColo(new Request(url, init), colo), env, {
+      waitUntil() {
+        throw new Error("waitUntil");
+      },
+    });
+    const text = await res.text();
+    return { status: res.status, text, cache: res.headers.get("cache-control") || "", logs };
+  } finally {
+    console.log = prev;
+  }
+}
+
+function pingTraceOk(text, forbidden) {
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch (err) {
+    return false;
+  }
+  const keys = Object.keys(body);
+  if (keys.length !== 3 || keys[0] !== "t_ping_rx" || keys[1] !== "t_email_sent" || keys[2] !== "colo") return false;
+  if (!Number.isFinite(body.t_ping_rx) || !Number.isFinite(body.t_email_sent)) return false;
+  if (body.t_email_sent < body.t_ping_rx) return false;
+  if (typeof body.colo !== "string") return false;
+  if (text.indexOf(WRITE_KEY) !== -1 || text.indexOf(READ_KEY) !== -1 || text.indexOf(PING_KEY) !== -1) return false;
+  for (let i = 0; i < forbidden.length; i++) {
+    if (forbidden[i] && text.indexOf(forbidden[i]) !== -1) return false;
+  }
+  return true;
+}
+
+function traceLogOk(line, ev, forbidden) {
+  if (!new RegExp("^trace tid=[0-9a-f]{8} ev=" + ev + " t=\\d+ colo=[A-Za-z0-9]*").test(line)) return false;
+  if (line.indexOf(WRITE_KEY) !== -1 || line.indexOf(READ_KEY) !== -1 || line.indexOf(PING_KEY) !== -1) return false;
+  if (line.indexOf(NONCE) !== -1) return false;
+  for (let i = 0; i < forbidden.length; i++) {
+    if (forbidden[i] && line.indexOf(forbidden[i]) !== -1) return false;
+  }
+  return true;
 }
 
 function b64urlToBytes(value) {
@@ -134,8 +213,10 @@ const prefix = "a".repeat(497);
 const emoji = "\u{1F600}";
 const wide = prefix + emoji;
 const truncEnv = makeEnv();
-const trunc = await call(truncEnv.env, { body: { text: wide, nonce: NONCE } });
-assert(trunc.status === 200 && trunc.text === "{}" && trunc.logs.length === 0, "POST /ping truncation 200");
+const trunc = await call(truncEnv.env, { body: { text: wide, nonce: NONCE }, colo: "EWR" });
+assert(trunc.status === 200 && pingTraceOk(trunc.text, [prefix, emoji]) && trunc.logs.length === 1, "POST /ping truncation 200");
+assert(traceLogOk(trunc.logs[0], "ping", [prefix, emoji]) && trunc.logs[0].indexOf("colo=EWR") !== -1, "POST /ping truncation log is tid only");
+assert(JSON.parse(trunc.text).colo === "EWR", "POST /ping truncation colo");
 assert(truncEnv.sent.length === 1, "POST /ping truncation sent one email");
 const truncMsg = truncEnv.sent[0];
 const parts = truncMsg.subject.split(" ");
@@ -150,8 +231,8 @@ assert(truncMsg.to === undefined && truncMsg.from.email === PING_FROM && truncMs
 const okEnv = makeEnv();
 const phrase = "hello";
 const ok = await call(okEnv.env, { body: { text: phrase, nonce: NONCE } });
-assert(ok.status === 200 && ok.text === "{}" && (ok.cache || "").indexOf("no-store") !== -1, "POST /ping 200");
-assert(ok.logs.length === 0 && okEnv.sent.length === 1, "POST /ping 200 logs nothing");
+assert(ok.status === 200 && pingTraceOk(ok.text, [phrase]) && (ok.cache || "").indexOf("no-store") !== -1, "POST /ping 200");
+assert(ok.logs.length === 1 && traceLogOk(ok.logs[0], "ping", [phrase]) && okEnv.sent.length === 1, "POST /ping 200 log has no text");
 const okMsg = okEnv.sent[0];
 const expectSubject = "EyeGrok ping " + NONCE + " " + Buffer.from(phrase, "utf8").toString("base64url");
 assert(okMsg.subject === expectSubject, "POST /ping 200 subject");
@@ -178,5 +259,159 @@ assert(
     failed.logs[0].indexOf(PING_KEY) === -1,
   "POST /ping send failure logs code only"
 );
+
+const replyNonce = "fedcba9876543210fedcba9876543210";
+const plainNonce = "abcdefabcdefabcdefabcdefabcdefab";
+const replies = memoryReplies();
+const replyEnv = makeEnv({ REPLIES: replies }).env;
+const origin = "https://relay.test";
+
+const early = await callAt(replyEnv, origin + "/reply/" + replyNonce, { token: READ_KEY, colo: "EWR" });
+assert(early.status === 404, "GET /reply miss 404");
+const earlyBody = JSON.parse(early.text);
+assert(
+  Object.keys(earlyBody).join(",") === "t_served,colo" &&
+    Number.isFinite(earlyBody.t_served) &&
+    earlyBody.colo === "EWR" &&
+    early.logs.length === 1 &&
+    traceLogOk(early.logs[0], "get", []) &&
+    early.logs[0].indexOf("hit=0") !== -1,
+  "GET /reply miss body"
+);
+
+const rtNow = Date.now();
+const rt = { t_routine_start: rtNow - 30, t_answer_ready: rtNow - 20, t_curl: rtNow - 10 };
+const jsonPhrase = "json-reply";
+const posted = await callAt(replyEnv, origin + "/reply", {
+  method: "POST",
+  token: WRITE_KEY,
+  contentType: "application/json",
+  colo: "IAD",
+  body: JSON.stringify({ nonce: replyNonce, text: jsonPhrase, rt: rt }),
+});
+assert(posted.status === 204 && posted.text === "" && posted.logs.length === 1, "POST /reply with rt 204");
+assert(traceLogOk(posted.logs[0], "put", [jsonPhrase]) && posted.logs[0].indexOf("colo=IAD") !== -1, "POST /reply put log");
+const stored = replies.map.get("r:" + replyNonce);
+assert(typeof stored === "string" && stored.indexOf(jsonPhrase) !== -1 && stored.indexOf("t_routine_start") !== -1, "POST /reply stores text and rt");
+assert(stored.startsWith('{"text":'), "stored envelope text first");
+
+const hit = await callAt(replyEnv, origin + "/reply/" + replyNonce, { token: READ_KEY, colo: "EWR" });
+const hitBody = JSON.parse(hit.text);
+assert(hit.status === 200 && hit.text.startsWith('{"text":'), "GET /reply hit text first");
+assert(
+  Object.keys(hitBody).join(",") === "text,trace" &&
+    hitBody.text === jsonPhrase &&
+    hitBody.trace.t_reply_rx <= hitBody.trace.t_reply_served &&
+    hitBody.trace.colo_reply === "IAD" &&
+    hitBody.trace.colo_get === "EWR" &&
+    hitBody.trace.rt.t_routine_start === rt.t_routine_start &&
+    hitBody.trace.rt.t_answer_ready === rt.t_answer_ready &&
+    hitBody.trace.rt.t_curl === rt.t_curl &&
+    JSON.stringify(hitBody.trace).indexOf('"text"') === -1,
+  "GET /reply hit trace"
+);
+assert(hit.logs.length === 1 && hit.logs[0].indexOf("hit=1") !== -1 && hit.logs[0].indexOf(jsonPhrase) === -1, "GET /reply hit log");
+
+const again = await callAt(replyEnv, origin + "/reply/" + replyNonce, { token: READ_KEY, colo: "EWR" });
+const againBody = JSON.parse(again.text);
+assert(again.status === 404 && againBody.colo === "EWR" && Number.isFinite(againBody.t_served), "second GET is a miss");
+assert(!replies.map.has("r:" + replyNonce), "delete removed the key");
+
+const badRt = await callAt(replyEnv, origin + "/reply", {
+  method: "POST",
+  token: WRITE_KEY,
+  contentType: "application/json",
+  body: JSON.stringify({
+    nonce: replyNonce,
+    text: jsonPhrase,
+    rt: { a: 1, b: 2, c: 3, d: 4 },
+  }),
+});
+assert(badRt.status === 400 && !replies.map.has("r:" + replyNonce), "POST /reply bad rt 400 stores nothing");
+
+const plainPhrase = "plain-reply";
+const plainPost = await callAt(replyEnv, origin + "/reply/" + plainNonce, {
+  method: "POST",
+  token: WRITE_KEY,
+  contentType: "text/plain; charset=utf-8",
+  colo: "IAD",
+  body: plainPhrase,
+});
+assert(plainPost.status === 204 && plainPost.logs.length === 1 && plainPost.logs[0].indexOf(plainPhrase) === -1, "POST /reply/<nonce> text/plain 204");
+const plainHit = await callAt(replyEnv, origin + "/reply/" + plainNonce, { token: READ_KEY, colo: "EWR" });
+const plainBody = JSON.parse(plainHit.text);
+assert(
+  plainHit.status === 200 &&
+    plainHit.text.startsWith('{"text":') &&
+    plainBody.text === plainPhrase &&
+    plainBody.trace.rt === undefined &&
+    plainBody.trace.colo_reply === "IAD",
+  "GET text/plain reply"
+);
+const plainAgain = await callAt(replyEnv, origin + "/reply/" + plainNonce, { token: READ_KEY });
+assert(plainAgain.status === 404, "second GET after text/plain is a miss");
+
+const plainAuth = await callAt(replyEnv, origin + "/reply/" + plainNonce, {
+  method: "POST",
+  token: "x".repeat(32),
+  contentType: "text/plain",
+  body: plainPhrase,
+});
+assert(plainAuth.status === 401 && !replies.map.has("r:" + plainNonce), "POST /reply/<nonce> bad bearer 401");
+
+const plainType = await callAt(replyEnv, origin + "/reply/" + plainNonce, {
+  method: "POST",
+  token: WRITE_KEY,
+  contentType: "application/json",
+  body: plainPhrase,
+});
+assert(plainType.status === 400 && !replies.map.has("r:" + plainNonce), "POST /reply/<nonce> json type 400");
+
+const plainEmpty = await callAt(replyEnv, origin + "/reply/" + plainNonce, {
+  method: "POST",
+  token: WRITE_KEY,
+  contentType: "text/plain",
+  body: "",
+});
+assert(plainEmpty.status === 400, "POST /reply/<nonce> empty 400");
+
+const plainBig = await callAt(replyEnv, origin + "/reply/" + plainNonce, {
+  method: "POST",
+  token: WRITE_KEY,
+  contentType: "text/plain",
+  body: "b".repeat(16385),
+});
+assert(plainBig.status === 413 && !replies.map.has("r:" + plainNonce), "POST /reply/<nonce> over text limit 413");
+
+const plainHuge = "c".repeat(20 * 1024 + 1);
+const plainOver = await callAt(replyEnv, origin + "/reply/" + plainNonce, {
+  method: "POST",
+  token: WRITE_KEY,
+  contentType: "text/plain",
+  body: plainHuge,
+});
+assert(plainOver.status === 413, "POST /reply/<nonce> over body limit 413");
+
+const badPath = await callAt(replyEnv, origin + "/reply/not-a-nonce", {
+  method: "POST",
+  token: WRITE_KEY,
+  contentType: "text/plain",
+  body: plainPhrase,
+});
+assert(badPath.status === 400, "POST /reply/<nonce> bad nonce 400");
+
+replies.map.set("r:" + replyNonce, "legacy-text");
+const legacy = await callAt(replyEnv, origin + "/reply/" + replyNonce, { token: READ_KEY, colo: "LHR" });
+const legacyBody = JSON.parse(legacy.text);
+assert(
+  legacy.status === 200 &&
+    legacyBody.text === "legacy-text" &&
+    legacyBody.trace.t_reply_rx === undefined &&
+    Number.isFinite(legacyBody.trace.t_reply_served) &&
+    legacyBody.trace.colo_get === "LHR",
+  "GET legacy raw text"
+);
+const legacyAgain = await callAt(replyEnv, origin + "/reply/" + replyNonce, { token: READ_KEY });
+assert(legacyAgain.status === 404, "second GET after legacy hit is a miss");
 
 log("smoke: ok");

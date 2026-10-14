@@ -87,6 +87,96 @@ function clientIp(request) {
   return "local";
 }
 
+function coloOf(request) {
+  const cf = request && request.cf;
+  const colo = cf && typeof cf.colo === "string" ? cf.colo : "";
+  if (/^[A-Za-z0-9]{1,8}$/.test(colo)) return colo;
+  return "";
+}
+
+// tid is 8 hex chars. The line never includes message text or a key.
+function logTrace(nonce, ev, t, colo, hit) {
+  const tid = typeof nonce === "string" && /^[0-9a-f]{8}/.test(nonce) ? nonce.slice(0, 8) : "--------";
+  let line = "trace tid=" + tid + " ev=" + ev + " t=" + t + " colo=" + (colo || "");
+  if (hit === 0 || hit === 1) line += " hit=" + hit;
+  console.log(line);
+}
+
+const RT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RT_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/;
+
+// rt is optional. Absent is fine. Present must be at most 3 finite numbers
+// within a day of the Worker clock. A bad rt rejects the whole POST.
+function copyRt(rt, now) {
+  if (rt === undefined) return { ok: true, rt: null };
+  if (rt === null || typeof rt !== "object" || Array.isArray(rt)) return { ok: false };
+  const keys = Object.keys(rt);
+  if (keys.length > 3) return { ok: false };
+  const out = {};
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if (!RT_KEY_RE.test(key) || key === "text") return { ok: false };
+    const n = rt[key];
+    if (typeof n !== "number" || !Number.isFinite(n)) return { ok: false };
+    if (Math.abs(n - now) > RT_WINDOW_MS) return { ok: false };
+    out[key] = n;
+  }
+  return { ok: true, rt: keys.length === 0 ? null : out };
+}
+
+function replyEnvelope(text, tReplyRx, colo, rt) {
+  const tr = { t_reply_rx: tReplyRx };
+  if (colo) tr.colo_reply = colo;
+  if (rt) tr.rt = rt;
+  return JSON.stringify({ text: text, tr: tr });
+}
+
+// New rows are {"text","tr"}. Older rows are the raw text. A JSON value with
+// no string text stays the raw text, so a reply that merely starts with "{" is kept.
+function unpackReply(value) {
+  if (typeof value !== "string") return { text: "", tr: null };
+  if (value.length > 0 && value.charCodeAt(0) === 0x7b) {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof parsed.text === "string") {
+        const tr = parsed.tr && typeof parsed.tr === "object" && !Array.isArray(parsed.tr) ? parsed.tr : null;
+        return { text: parsed.text, tr: tr };
+      }
+    } catch (err) {
+      // not an envelope
+    }
+  }
+  return { text: value, tr: null };
+}
+
+function traceForHit(tr, tServed, coloGet) {
+  const trace = {};
+  if (tr) {
+    if (typeof tr.t_reply_rx === "number" && Number.isFinite(tr.t_reply_rx)) trace.t_reply_rx = tr.t_reply_rx;
+    if (typeof tr.colo_reply === "string" && /^[A-Za-z0-9]{1,8}$/.test(tr.colo_reply)) trace.colo_reply = tr.colo_reply;
+    if (tr.rt && typeof tr.rt === "object" && !Array.isArray(tr.rt)) {
+      const rt = {};
+      const keys = Object.keys(tr.rt);
+      for (let i = 0; i < keys.length && i < 3; i++) {
+        const key = keys[i];
+        const n = tr.rt[key];
+        if (key !== "text" && RT_KEY_RE.test(key) && typeof n === "number" && Number.isFinite(n)) rt[key] = n;
+      }
+      if (Object.keys(rt).length > 0) trace.rt = rt;
+    }
+  }
+  trace.t_reply_served = tServed;
+  trace.colo_get = coloGet;
+  return trace;
+}
+
+function isTextPlain(request) {
+  const raw = request.headers.get("content-type") || "";
+  const semi = raw.indexOf(";");
+  const type = (semi >= 0 ? raw.slice(0, semi) : raw).trim().toLowerCase();
+  return type === "text/plain";
+}
+
 function missLimited(ip, now) {
   const slot = missBuckets.get(ip);
   if (!slot || now - slot.start >= MISS_WINDOW_MS) return false;
@@ -146,7 +236,14 @@ function presentedToken(request) {
   return header.slice(prefix.length);
 }
 
+async function putReply(env, nonce, text, tReplyRx, colo, rt) {
+  await env.REPLIES.put("r:" + nonce, replyEnvelope(text, tReplyRx, colo, rt), { expirationTtl: TTL_SECONDS });
+  logTrace(nonce, "put", tReplyRx, colo);
+}
+
 async function postReply(request, env) {
+  const tReplyRx = Date.now();
+  const colo = coloOf(request);
   const declared = request.headers.get("content-length");
   if (declared !== null && declared !== "" && Number(declared) > MAX_BODY_BYTES) {
     return json(413, {});
@@ -169,16 +266,61 @@ async function postReply(request, env) {
   if (textBytes < 1) return json(400, {});
   if (textBytes > MAX_TEXT_BYTES) return json(413, {});
 
-  await env.REPLIES.put("r:" + body.nonce, body.text, { expirationTtl: TTL_SECONDS });
+  const checked = copyRt(body.rt, Date.now());
+  if (!checked.ok) return json(400, {});
+
+  await putReply(env, body.nonce, body.text, tReplyRx, colo, checked.rt);
   return json(204, {});
 }
 
-async function getReply(nonce, env, ctx) {
+// Body is the reply text. Same auth and size limits as JSON POST /reply. No rt.
+async function postReplyPlain(request, env, nonce) {
+  const tReplyRx = Date.now();
+  const colo = coloOf(request);
+  if (!isTextPlain(request)) return json(400, {});
+
+  const declared = request.headers.get("content-length");
+  if (declared !== null && declared !== "" && Number(declared) > MAX_BODY_BYTES) {
+    return json(413, {});
+  }
+
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength > MAX_BODY_BYTES) return json(413, {});
+
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch (err) {
+    return json(400, {});
+  }
+  const textBytes = new TextEncoder().encode(text).byteLength;
+  if (textBytes < 1) return json(400, {});
+  if (textBytes > MAX_TEXT_BYTES) return json(413, {});
+
+  await putReply(env, nonce, text, tReplyRx, colo, null);
+  return json(204, {});
+}
+
+async function getReply(nonce, env, ctx, request) {
   const key = "r:" + nonce;
   const value = await env.REPLIES.get(key);
-  if (value === null) return json(404, {});
-  ctx.waitUntil(env.REPLIES.delete(key));
-  return json(200, { text: value });
+  const tServed = Date.now();
+  const colo = coloOf(request);
+  if (value === null) {
+    logTrace(nonce, "get", tServed, colo, 0);
+    return json(404, { t_served: tServed, colo: colo });
+  }
+  const unpacked = unpackReply(value);
+  logTrace(nonce, "get", tServed, colo, 1);
+  // Await so a second read in this location misses. Another location can still
+  // serve a cached copy for up to about 60 s. The 600 s TTL is the backstop.
+  try {
+    await env.REPLIES.delete(key);
+  } catch (err) {
+    console.log("reply-del err=" + ((err && err.name) || "Error"));
+  }
+  void ctx;
+  return json(200, { text: unpacked.text, trace: traceForHit(unpacked.tr, tServed, colo) });
 }
 
 async function readPairBody(request) {
@@ -262,6 +404,8 @@ function pingFromOrEmpty(env) {
 }
 
 async function postPing(request, env) {
+  const tPingRx = Date.now();
+  const colo = coloOf(request);
   const pingKey = typeof env.PING_KEY === "string" ? env.PING_KEY : "";
   if (pingKey.length < 32 || pingKey === env.WRITE_KEY || pingKey === env.READ_KEY) {
     return json(503, { error: "ping-off" });
@@ -305,7 +449,9 @@ async function postPing(request, env) {
     console.log("ping-send err=" + code);
     return json(502, {});
   }
-  return json(200, {});
+  const tEmailSent = Date.now();
+  logTrace(body.nonce, "ping", tEmailSent, colo);
+  return json(200, { t_ping_rx: tPingRx, t_email_sent: tEmailSent, colo: colo });
 }
 
 export default {
@@ -327,11 +473,18 @@ export default {
         return await postReply(request, env);
       }
 
+      if (request.method === "POST" && path.startsWith("/reply/")) {
+        if (!timingSafeEqualString(presentedToken(request), keys.writeKey)) return json(401, {});
+        const nonce = decodeURIComponent(path.slice("/reply/".length));
+        if (!NONCE_RE.test(nonce)) return json(400, {});
+        return await postReplyPlain(request, env, nonce);
+      }
+
       if (request.method === "GET" && path.startsWith("/reply/")) {
         if (!timingSafeEqualString(presentedToken(request), keys.readKey)) return json(401, {});
         const nonce = decodeURIComponent(path.slice("/reply/".length));
         if (!NONCE_RE.test(nonce)) return json(400, {});
-        return await getReply(nonce, env, ctx);
+        return await getReply(nonce, env, ctx, request);
       }
 
       if (path === "/pair" || path.startsWith("/pair/")) {

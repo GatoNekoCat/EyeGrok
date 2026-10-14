@@ -20,11 +20,13 @@ namespace EyeGrok.Net
 
     public sealed class RelayClient
     {
-        public const float FirstDelaySeconds = 5f;
-        public const float IntervalSeconds = 4f;
+        public const float FirstDelaySeconds = 2f;
+        public const float IntervalSeconds = 1f;
         public const float DeadlineSeconds = 120f;
-        public const int MaxRequests = 30;
+        public const int MaxRequests = 125;
         public const float MaxBackoffSeconds = 16f;
+
+        public PingTrace Trace;
 
         readonly IHttpTransport _transport;
         readonly ISecretStore _store;
@@ -53,7 +55,7 @@ namespace EyeGrok.Net
                 if (_clock.Now - start > DeadlineSeconds)
                     break;
                 requests++;
-                var once = await Once(nonce, ct);
+                var once = await Once(nonce, ct, requests);
                 if (once.Ok)
                 {
                     once.Requests = requests;
@@ -80,7 +82,7 @@ namespace EyeGrok.Net
 
         public async Task<RelayResult> CheckAgain(string nonce, CancellationToken ct)
         {
-            var once = await Once(nonce, ct);
+            var once = await Once(nonce, ct, 0);
             once.Requests = 1;
             if (once.Miss)
             {
@@ -90,12 +92,14 @@ namespace EyeGrok.Net
             return once;
         }
 
-        async Task<RelayResult> Once(string nonce, CancellationToken ct)
+        async Task<RelayResult> Once(string nonce, CancellationToken ct, int pollIndex)
         {
             string url;
             string key;
             if (!_store.TryGet("relayUrl", out url) || !_store.TryGet("relayReadKey", out key))
                 return Fatal("relay 0");
+            var trace = Trace;
+            if (trace != null && pollIndex > 0) trace.MarkPollSend(pollIndex);
             var response = await _transport.Send(new HttpRequest
             {
                 Method = "GET",
@@ -103,6 +107,7 @@ namespace EyeGrok.Net
                 Authorization = "Bearer " + key,
                 TimeoutSeconds = 10
             }, ct);
+            if (trace != null && pollIndex > 0) trace.MarkPollRecv(pollIndex, response.Status, response.Body);
             if (response.NetworkError || response.Status == 0)
                 return Backoff();
             if (response.Status == 200)

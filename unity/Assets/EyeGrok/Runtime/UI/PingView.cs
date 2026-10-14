@@ -53,6 +53,9 @@ namespace EyeGrok.UI
         InputAction _pushToTalk;
         CancellationTokenSource _forget;
         bool _modelLoading;
+        AudioSource _cue;
+        AudioClip _chime;
+        float _nextThink;
 
         void Awake()
         {
@@ -67,6 +70,8 @@ namespace EyeGrok.UI
                 _store,
                 clock);
             _controller.Changed += Refresh;
+            _controller.ReplyArrived += PlayReplyCue;
+            PrepareCue();
             if (TalkButton != null)
             {
                 TalkButton.Down = OnTalkDown;
@@ -90,6 +95,14 @@ namespace EyeGrok.UI
             BindPushToTalk();
             LoadStoredSecrets();
             Refresh();
+        }
+
+        void Update()
+        {
+            if (_controller == null || _controller.State != PingState.AwaitingReply) return;
+            if (Time.unscaledTime < _nextThink) return;
+            _nextThink = Time.unscaledTime + 0.5f;
+            _controller.RefreshThinkingHint();
         }
 
         void Start()
@@ -277,6 +290,88 @@ namespace EyeGrok.UI
             }
             if (ReplyLine != null)
                 ReplyText.Apply(new UiTextSink(ReplyLine), _controller.Reply);
+            if (_controller.State == PingState.Done)
+                _controller.MarkRendered();
+        }
+
+        void PrepareCue()
+        {
+            try
+            {
+                _cue = gameObject.GetComponent<AudioSource>();
+                if (_cue == null) _cue = gameObject.AddComponent<AudioSource>();
+                _cue.playOnAwake = false;
+                _cue.spatialBlend = 0f;
+                _chime = BuildChime();
+            }
+            catch (Exception ex)
+            {
+                Debug.Log("chime err=" + ex.GetType().Name);
+            }
+        }
+
+        void PlayReplyCue()
+        {
+            try
+            {
+                if (_cue != null && _chime != null) _cue.PlayOneShot(_chime, 0.45f);
+            }
+            catch (Exception ex)
+            {
+                Debug.Log("chime err=" + ex.GetType().Name);
+            }
+            HapticTick();
+        }
+
+        static AudioClip BuildChime()
+        {
+            const int rate = 22050;
+            const int n = 3308;
+            var data = new float[n];
+            for (var i = 0; i < n; i++)
+            {
+                var t = i / (float)rate;
+                var env = Math.Exp(-18.0 * t);
+                var sample = Math.Sin(2.0 * Math.PI * 880.0 * t) * 0.65
+                    + Math.Sin(2.0 * Math.PI * 1318.5 * t) * 0.35;
+                data[i] = (float)(sample * env * 0.4);
+            }
+            var clip = AudioClip.Create("eyegrok-chime", n, 1, rate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
+        static void HapticTick()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = player.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var vibrator = activity.Call<AndroidJavaObject>("getSystemService", "vibrator"))
+                {
+                    if (vibrator == null) return;
+                    using (var version = new AndroidJavaClass("android.os.Build$VERSION"))
+                    {
+                        var sdk = version.GetStatic<int>("SDK_INT");
+                        if (sdk >= 26)
+                        {
+                            using (var effectClass = new AndroidJavaClass("android.os.VibrationEffect"))
+                            using (var effect = effectClass.CallStatic<AndroidJavaObject>("createOneShot", 40L, 80))
+                                vibrator.Call("vibrate", effect);
+                        }
+                        else
+                        {
+                            vibrator.Call("vibrate", 40L);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.Log("haptic err=" + ex.GetType().Name);
+            }
+#endif
         }
 
         static void DisableRichText(Text field)

@@ -27,6 +27,7 @@ namespace EyeGrok.Net
                 req.SetRequestHeader("Authorization", request.Authorization);
             try
             {
+                if (request.OnWireSend != null) request.OnWireSend();
                 var op = req.SendWebRequest();
                 while (!op.isDone)
                 {
@@ -37,6 +38,7 @@ namespace EyeGrok.Net
                     }
                     await Task.Yield();
                 }
+                if (request.OnWireDone != null) request.OnWireDone();
                 var network = req.result == UnityWebRequest.Result.ConnectionError
                     || req.result == UnityWebRequest.Result.DataProcessingError;
                 var status = (int)req.responseCode;

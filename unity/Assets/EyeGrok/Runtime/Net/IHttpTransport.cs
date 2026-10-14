@@ -1,6 +1,7 @@
 // Copyright 2026 EyeGrok contributors
 // SPDX-License-Identifier: Apache-2.0
 
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,6 +15,8 @@ namespace EyeGrok.Net
         public string Authorization;
         public string ContentType;
         public int TimeoutSeconds;
+        public Action OnWireSend;
+        public Action OnWireDone;
     }
 
     public sealed class HttpResponse

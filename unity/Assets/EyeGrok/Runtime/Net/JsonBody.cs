@@ -87,5 +87,105 @@ namespace EyeGrok.Net
             }
             return false;
         }
+
+        public static bool TryReadLong(string json, string key, int from, out long value, out int at)
+        {
+            value = 0;
+            at = -1;
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(key)) return false;
+            var needle = "\"" + key + "\"";
+            var startAt = from < 0 ? 0 : from;
+            if (startAt > json.Length) return false;
+            var keyAt = json.IndexOf(needle, startAt, StringComparison.Ordinal);
+            if (keyAt < 0) return false;
+            var colon = json.IndexOf(':', keyAt + needle.Length);
+            if (colon < 0) return false;
+            var i = colon + 1;
+            while (i < json.Length && (json[i] == ' ' || json[i] == '\n' || json[i] == '\r' || json[i] == '\t')) i++;
+            if (i >= json.Length) return false;
+            var start = i;
+            if (json[i] == '-') i++;
+            var digits = 0;
+            while (i < json.Length && json[i] >= '0' && json[i] <= '9')
+            {
+                i++;
+                digits++;
+            }
+            if (digits < 1 || digits > 18) return false;
+            if (i < json.Length && (json[i] == '.' || json[i] == 'e' || json[i] == 'E')) return false;
+            long parsed;
+            if (!long.TryParse(json.Substring(start, i - start), out parsed)) return false;
+            value = parsed;
+            at = i;
+            return true;
+        }
+
+        public static bool TryReadToken(string json, string key, int from, out string value)
+        {
+            value = null;
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(key)) return false;
+            var needle = "\"" + key + "\"";
+            var startAt = from < 0 ? 0 : from;
+            if (startAt > json.Length) return false;
+            var keyAt = json.IndexOf(needle, startAt, StringComparison.Ordinal);
+            if (keyAt < 0) return false;
+            var colon = json.IndexOf(':', keyAt + needle.Length);
+            if (colon < 0) return false;
+            var i = colon + 1;
+            while (i < json.Length && (json[i] == ' ' || json[i] == '\n' || json[i] == '\r' || json[i] == '\t')) i++;
+            if (i >= json.Length || json[i] != '"') return false;
+            i++;
+            var start = i;
+            while (i < json.Length)
+            {
+                var c = json[i];
+                var ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+                if (!ok) break;
+                i++;
+                if (i - start > 8) return false;
+            }
+            if (i >= json.Length || json[i] != '"' || i == start) return false;
+            value = json.Substring(start, i - start);
+            return true;
+        }
+
+        public static bool TryObjectAfter(string json, string key, int from, out string body)
+        {
+            body = null;
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(key)) return false;
+            var needle = "\"" + key + "\"";
+            var startAt = from < 0 ? 0 : from;
+            if (startAt > json.Length) return false;
+            var keyAt = json.IndexOf(needle, startAt, StringComparison.Ordinal);
+            if (keyAt < 0) return false;
+            var brace = json.IndexOf('{', keyAt + needle.Length);
+            if (brace < 0 || brace - keyAt > needle.Length + 8) return false;
+            var depth = 0;
+            for (var i = brace; i < json.Length; i++)
+            {
+                var c = json[i];
+                if (c == '"')
+                {
+                    i++;
+                    while (i < json.Length && json[i] != '"')
+                    {
+                        if (json[i] == '\\' && i + 1 < json.Length) i++;
+                        i++;
+                    }
+                    continue;
+                }
+                if (c == '{') depth++;
+                else if (c == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        body = json.Substring(brace, i - brace + 1);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
     }
 }

@@ -107,7 +107,7 @@ Expected screen states, pointer or controller only:
 1. Before setup: status `Unconfigured`, setup line `Not set up — tap Pair`.
 2. After import: setup line `Configured`, status `Idle — Hold to talk`. While the model loads, the status can read `Loading voice model…`.
 3. Hold the large Hold to talk button. Status `Recording — Release to send`. Releasing outside the button counts as release. Under half a second returns to Idle with `Too short`.
-4. After release: `Transcribing`, then `Sending`, then `AwaitingReply — Waiting for reply`. The transcript line shows the words. Logs show `stt len=` and `nonce=` (6 hex chars), never the words.
+4. After release: `Transcribing`, then `Sending`, then `AwaitingReply — Delivered, thinking N s`. The N counter ticks while the reply is outstanding. The transcript line shows the words. Logs show `stt len=`, `nonce=` (6 hex chars), and one `trace` line of stamps. They never show the words or a key. A reply plays a short generated chime, and on Android a 40 ms vibration.
 5. When the reply arrives: status `Done — Done`, reply text on screen. Log shows `reply len=` only.
 6. If nothing arrives: after 120 s, status Error with `no reply in 120 s. The reply may still arrive. Use Check again.` Check again does one more read. Cancel during the wait returns to Idle and stops further requests.
 7. Forget setup is a 3 second hold. It returns to Unconfigured.
