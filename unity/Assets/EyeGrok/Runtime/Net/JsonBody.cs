@@ -1,6 +1,7 @@
 // Copyright 2026 EyeGrok contributors
 // SPDX-License-Identifier: Apache-2.0
 
+using System;
 using System.Text;
 
 namespace EyeGrok.Net
