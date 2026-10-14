@@ -2,7 +2,7 @@
 
 Run this on a Frame. The coder does not run it. Probe procedures stay in `docs/P0_RESULTS.md`.
 
-Before you start: your relay (with PAIR_KEY) and Bot webhook, see docs/RELAY.md.
+Before you start: a self-hosted relay is required, and the Bot webhook. See docs/RELAY.md. QR or code pairing also needs PAIR_KEY. USB push does not.
 
 1. Turn on Developer Mode on the Frame. PASS when the installer gets past the Frame step.
 2. Start Lepton Development from the Steam Library on the Frame. PASS when the installer does not stop on "The Frame refused the Wi-Fi connection. Start Lepton Development from the Steam Library on the Frame, or any Android game from Steam, then click Retry." and does not stop on "The Frame is connected, but Lepton Development is not running. Start Lepton Development from the Steam Library on the Frame, then click Retry."

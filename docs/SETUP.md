@@ -1,8 +1,8 @@
 # Setup
 
-EyeGrok on a Steam Frame is a flat app. You hold a button, speak, and read the reply. You bring your own Bot webhook and your own relay. The app stores the four setup values in the Android Keystore.
+EyeGrok on a Steam Frame is a flat app. You hold a button, speak, and read the reply. v0.1 requires your own Bot webhook and a self-hosted relay. The app stores the four setup values in the Android Keystore.
 
-Before you start: your relay (with PAIR_KEY) and Bot webhook, see docs/RELAY.md.
+Before you start: set up the relay. It is required. See docs/RELAY.md. QR or code pairing also needs PAIR_KEY. USB push does not.
 
 1. Turn on Developer Mode on the Frame.
 2. Start Lepton Development from the Steam Library on the Frame.

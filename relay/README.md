@@ -1,5 +1,7 @@
 # EyeGrok relay
 
+EyeGrok v0.1 requires this Worker. The app does not read the reply on the webhook response.
+
 Cloudflare Worker. One KV key per nonce, read once, gone after 600 seconds. No runtime dependencies. `wrangler` (see `package.json`) is a dev tool and is not part of the APK. Its license is UNVERIFIED and it is not redistributed.
 
 Full API, limits, and the Durable Object fallback: `docs/RELAY.md`.

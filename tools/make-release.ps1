@@ -46,7 +46,7 @@ Copy-Item -LiteralPath (Join-Path $repo "THIRD_PARTY_NOTICES.md") -Destination $
 $readme = @"
 EyeGrok $Version
 
-Before you start: your relay (with PAIR_KEY) and Bot webhook, see docs/RELAY.md in the source tree.
+Before you start: a self-hosted relay is required, and the Bot webhook. See docs/RELAY.md in the source tree. QR or code pairing also needs PAIR_KEY.
 
 1. Turn on Developer Mode on the Frame.
 2. Start Lepton Development from the Steam Library on the Frame.

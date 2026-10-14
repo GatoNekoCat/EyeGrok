@@ -9,7 +9,7 @@ The installer encrypts the setup JSON before the relay stores it. The relay chec
 
 ## Assets
 
-The setup JSON holds four values: webhook URL, webhook key, relay URL, and relay read key. PAIR_KEY is a separate relay secret. The installer asks for it once per session, sends it as a bearer token, and does not write it to disk. The write key stays in the Bot. It is not an installer field.
+The setup JSON holds four values: webhook URL, webhook key, relay URL, and relay read key. v0.1 requires the relay URL and the relay read key. USB push does not drop them. PAIR_KEY is a separate relay secret. The installer asks for it once per session, sends it as a bearer token, and does not write it to disk. The write key stays in the Bot. It is not an installer field.
 
 ## Actors
 

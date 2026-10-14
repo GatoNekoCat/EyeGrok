@@ -1,5 +1,7 @@
 # Relay
 
+v0.1 requires this relay. There is no shared EyeGrok relay. The human runs it on their own free Cloudflare account.
+
 EyeGrok does not receive the Bot's reply on the webhook response. A webhook `200` means the Bot accepted the call and started a run. It does not mean the run finished [F]. The routine posts the reply to this Worker. The app polls the Worker with a separate read key.
 
 The Worker is one KV mailbox. It has no runtime dependencies. `wrangler` is a dev tool and is not shipped.
@@ -22,7 +24,7 @@ npx wrangler kv namespace create REPLIES
 
 Copy `wrangler.example.toml` to `wrangler.toml` (gitignored) and paste the namespace id over both `REPLACE_ME` values. `wrangler.toml` is never committed.
 
-Generate three keys (32 random bytes each, base64url) and pipe them. Do not echo them and do not write them to a file. `PAIR_KEY` is optional. Pairing stays off until it is set, and `/health` and `/reply` keep working either way. It must differ from the write key and the read key.
+Generate three keys (32 random bytes each, base64url) and pipe them. Do not echo them and do not write them to a file. The relay itself is required. `PAIR_KEY` is the optional secret, not the Worker. Pairing stays off until it is set, and `/health` and `/reply` keep working either way. It must differ from the write key and the read key.
 
 ```
 # in a shell where the values are variables, not history if you can avoid it

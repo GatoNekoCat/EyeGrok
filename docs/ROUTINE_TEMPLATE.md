@@ -2,6 +2,8 @@
 
 Draft for P0-f. Prose only. No schedule.
 
+v0.1 requires the relay in docs/RELAY.md. The routine posts the reply there. A webhook 200 is not the reply.
+
 Create a Grok Bot routine with a webhook trigger. The webhook `key` is the secret senders pass as `Authorization: Bearer` [F]. A response of `200` means the Bot accepted the call and started a run. It does not mean the Bot has finished the instruction [F].
 
 Store the relay write key in Grok Bot Secrets as `EYEGROK_RELAY_WRITE_KEY`. The plan cites this as the Secrets store [R: GB1]. How that screen is labeled in the current Bot UI is UNVERIFIED until P0-f. Never put the key in chat or in a file.
