@@ -1,6 +1,6 @@
 # BOT-INSTALL
 
-You are a Grok Bot. Read this, then tell the human the steps in plain words. Read the first-use script aloud, as written. Do not add a flag, a host, a key, or a path. Do not repeat real keys in chat or write them into a file.
+You are a Grok Bot. Read this, then tell the human the steps in plain words. Read the first-use script aloud, as written. Use the base command. Add the flags below only when troubleshooting says so. Do not repeat real keys in chat or write them into a file.
 
 ## What you need
 
@@ -10,7 +10,7 @@ The human needs a Steam Frame with Lepton Development in the Steam Library, and 
 
 This version is 0.1.0, unreleased. A self-hosted relay is required. The human uses their own free Cloudflare account, signs in once, and does the setup in docs/RELAY.md. The sign-in is `npx wrangler login`. EyeGrok does not run a shared relay.
 
-The headset does not read the reply on the webhook response. A webhook result of 200 means the Bot accepted the call and started a run. It does not mean the run finished. The routine posts the reply to the relay. The headset polls the relay for up to 120 seconds.
+The headset does not read the reply on the POST response. It continues only when that POST returns 200. The routine posts the reply to the relay. The headset polls the relay for up to 120 seconds.
 
 Before the command, the human turns on Developer Mode on the Frame and starts Lepton Development from the Steam Library. Leave Lepton running. When the relay is up, run this and pass the values as one JSON line on stdin. Never as arguments. Never as environment variables.
 
@@ -24,15 +24,15 @@ The script prints `STEP tools`, `STEP frame`, and `STEP install` first. It print
 {"webhookUrl":"https://REPLACE_ME","webhookKey":"REPLACE_ME","relayUrl":"https://REPLACE_ME","relayReadKey":"REPLACE_ME"}
 ```
 
-Those four names are the fields `Test-SetupValues` checks. Both URLs must start with `https://`. This command does not pass `-AllowLoopbackHttp`, so an `http://` address is rejected. `webhookKey` and `relayReadKey` must be 16 to 512 characters with no whitespace. The relay rejects a read key shorter than 32 characters, and the read key must differ from the write key. The write key is not in this line. It stays with the Bot.
+Those four names are the fields `Test-SetupValues` checks. Both URLs must start with `https://`. This command does not pass `-AllowLoopbackHttp`, so an `http://` address is rejected. `webhookKey` and `relayReadKey` must be 16 to 512 characters with no whitespace. The relay rejects a read key shorter than 32 characters, and the read key must differ from the write key. The write key is not in this line. It stays with the Bot. `webhookUrl` is `https://<your relay>/ping`. `webhookKey` is `PING_KEY`.
 
 `pairKey` is not in this line. `-PairMode usb` does not post a pairing box and does not require `pairKey`.
 
 Before you send the line, the human opens EyeGrok on the Frame and leaves it open. The script then prints `STEP import` and checks up to 20 times, with a quarter-second pause between checks, that the headset took the file. The last lines on success are `Imported` and `OK`.
 
-The hands-free trigger is a Grok Bot routine with an email trigger on this bot's own Grok Bot inbox. The ping text rides in the email subject.
+The hands-free trigger is a Grok Bot routine with an email trigger on this bot's own Grok Bot inbox. The relay `POST /ping` checks `Authorization: Bearer` against `PING_KEY`, then emails that inbox with a `send_email` binding. The subject is `EyeGrok ping <nonce> <base64url text>`.
 
-The headset does not send that mail. It posts the spoken words to `webhookUrl` as JSON, fields `text` and `nonce`, with `webhookKey` as the Bearer token. It then reads the reply from `relayUrl` with `relayReadKey`. You post the reply to the relay with the write key. The reply draft is docs/ROUTINE_TEMPLATE.md. Tell the human to hold to talk, then read the text that comes back from the relay.
+The headset does not send that mail. It POSTs `{"text","nonce"}` to `webhookUrl` with header `Authorization: Bearer` and `webhookKey`. It then reads the reply from `relayUrl` with `relayReadKey`. Read the nonce and the base64url text from the subject. Decode the text. POST the reply to the relay `/reply` with the write key. The reply draft is docs/ROUTINE_TEMPLATE.md. Tell the human to hold to talk, then read the text that comes back from the relay.
 
 ## Coming next
 
@@ -51,7 +51,7 @@ Tell the human to do these, in this order.
 2. Put the headset on.
 3. Hold to talk. Say a short question in English. Let go.
 
-The reply is text on the headset. It can take up to 120 seconds. `Check again` does one more read. `Cancel` returns to Idle. After setup, Mic and Relay should read green. Routine stays `not tested` until the human taps `Test ping`.
+The reply is text on the headset. It can take up to 120 seconds. `Check again` does one more read. `Cancel` returns to Idle. Routine stays `not tested` until the human taps `Test ping`. Done sets it to green. Error sets it to red.
 
 ## First-use script
 
@@ -82,4 +82,4 @@ On a failed step the installer prints a key, then a sentence from `Get-EyeGrokEr
 | BAD values | The JSON line was missing or failed the four checks above. Fix the line and run the command again. The script does not name the bad field. |
 | The headset did not take the setup. Open EyeGrok on the Frame and try again, or use another pairing tab. | Open EyeGrok on the Frame before you send the JSON line. Then run the command again. |
 | Pairing is off on your relay. Add PAIR_KEY (see docs/RELAY.md), or use the USB push tab. | Not printed for `-PairMode usb`. For `qr`, `code`, or `all`, this is any pairing result other than 201, 401, or 403. |
-| The relay rejected the pairing key. | Not printed for `-PairMode usb`. For `qr`, `code`, or `all`, the pair key failed the installer check, or the relay returned 401 or 403. It must differ from the write key and the read key. |
+| The relay rejected the pairing key. | Not printed for `-PairMode usb`. For `qr`, `code`, or `all`, the pair key failed the installer check, or the relay returned 401 or 403. |
