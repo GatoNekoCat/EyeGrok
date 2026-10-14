@@ -25,11 +25,16 @@ preview_id = "REPLACE_ME"
 # It must be at least 32 characters and different from WRITE_KEY and READ_KEY.
 # /ping returns 503 until PING_KEY is set. /health and /reply do not use it.
 # PING_FROM is the sender on a domain onboarded to Email Service. It is a var, not a secret.
-# destination_address is the only recipient. The Worker leaves `to` unset so this address is used.
-# Replace both placeholders. Do not put a real hostname here.
+# PING_TO is the Bot inbox. The Worker passes it as `to`. It is a var, not a secret.
+# Each must contain @. A missing or invalid value makes /ping return 503
+# {"error":"ping-off","reason":"ping-from"} or {"error":"ping-off","reason":"ping-to"}.
+# The response does not include the address.
+# destination_address is the binding allowlist. Set it to the same inbox as PING_TO.
+# Replace the placeholders. Do not put a real address here.
 
 [vars]
 PING_FROM = "ping@example.invalid"
+PING_TO = "REPLACE_ME@example.invalid"
 
 [[send_email]]
 name = "EMAIL"

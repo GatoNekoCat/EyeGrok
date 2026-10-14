@@ -18,6 +18,7 @@ const WRITE_KEY = "w".repeat(32);
 const READ_KEY = "r".repeat(32);
 const PING_KEY = "p".repeat(32);
 const PING_FROM = "ping@example.invalid";
+const PING_TO = "REPLACE_ME@example.invalid";
 const NONCE = "0123456789abcdef0123456789abcdef";
 
 const log = console.log.bind(console);
@@ -37,6 +38,7 @@ function makeEnv(overrides) {
     READ_KEY,
     PING_KEY,
     PING_FROM,
+    PING_TO,
     EMAIL: {
       async send(msg) {
         sent.push(msg);
@@ -208,6 +210,42 @@ assert(
   "POST /ping reused READ_KEY 503"
 );
 
+const missingTo = makeEnv();
+delete missingTo.env.PING_TO;
+const missingToRes = await call(missingTo.env, { body: { text: "hello", nonce: NONCE } });
+assert(
+  missingToRes.status === 503 &&
+    missingToRes.text === '{"error":"ping-off","reason":"ping-to"}' &&
+    missingToRes.text.indexOf("@") === -1 &&
+    missingToRes.logs.length === 0 &&
+    missingTo.sent.length === 0,
+  "POST /ping missing PING_TO 503"
+);
+
+const badTo = "not-an-email";
+const badToEnv = makeEnv({ PING_TO: badTo });
+const badToRes = await call(badToEnv.env, { body: { text: "hello", nonce: NONCE } });
+assert(
+  badToRes.status === 503 &&
+    badToRes.text === '{"error":"ping-off","reason":"ping-to"}' &&
+    badToRes.text.indexOf(badTo) === -1 &&
+    badToRes.logs.length === 0 &&
+    badToEnv.sent.length === 0,
+  "POST /ping invalid PING_TO 503"
+);
+
+const missingFrom = makeEnv();
+delete missingFrom.env.PING_FROM;
+const missingFromRes = await call(missingFrom.env, { body: { text: "hello", nonce: NONCE } });
+assert(
+  missingFromRes.status === 503 &&
+    missingFromRes.text === '{"error":"ping-off","reason":"ping-from"}' &&
+    missingFromRes.text.indexOf("@") === -1 &&
+    missingFromRes.logs.length === 0 &&
+    missingFrom.sent.length === 0,
+  "POST /ping missing PING_FROM 503"
+);
+
 // 497 ASCII bytes plus a 4-byte emoji. Byte index 500 falls inside the emoji.
 const prefix = "a".repeat(497);
 const emoji = "\u{1F600}";
@@ -226,14 +264,21 @@ const subjectText = new TextDecoder("utf-8", { fatal: true }).decode(subjectByte
 assert(subjectBytes.byteLength <= 500 && subjectText === prefix, "POST /ping subject truncated on multibyte boundary");
 const truncBody = JSON.parse(truncMsg.text);
 assert(truncBody.nonce === NONCE && truncBody.text === wide, "POST /ping email body keeps full text");
-assert(truncMsg.to === undefined && truncMsg.from.email === PING_FROM && truncMsg.from.name === "EyeGrok", "POST /ping from binding sender");
+assert(truncMsg.to === PING_TO && truncMsg.from.email === PING_FROM && truncMsg.from.name === "EyeGrok", "POST /ping to is PING_TO");
 
 const okEnv = makeEnv();
 const phrase = "hello";
 const ok = await call(okEnv.env, { body: { text: phrase, nonce: NONCE } });
-assert(ok.status === 200 && pingTraceOk(ok.text, [phrase]) && (ok.cache || "").indexOf("no-store") !== -1, "POST /ping 200");
-assert(ok.logs.length === 1 && traceLogOk(ok.logs[0], "ping", [phrase]) && okEnv.sent.length === 1, "POST /ping 200 log has no text");
+assert(ok.status === 200 && pingTraceOk(ok.text, [phrase, PING_TO, PING_FROM]) && (ok.cache || "").indexOf("no-store") !== -1, "POST /ping 200");
+assert(
+  ok.logs.length === 1 &&
+    traceLogOk(ok.logs[0], "ping", [phrase, PING_TO, PING_FROM]) &&
+    ok.logs[0].indexOf("@") === -1 &&
+    okEnv.sent.length === 1,
+  "POST /ping 200 log has no text"
+);
 const okMsg = okEnv.sent[0];
+assert(okMsg.to === PING_TO, "POST /ping EMAIL to is PING_TO");
 const expectSubject = "EyeGrok ping " + NONCE + " " + Buffer.from(phrase, "utf8").toString("base64url");
 assert(okMsg.subject === expectSubject, "POST /ping 200 subject");
 assert(okMsg.text === JSON.stringify({ nonce: NONCE, text: phrase }), "POST /ping 200 body JSON");
@@ -256,7 +301,10 @@ assert(
   failed.logs.length === 1 &&
     failed.logs[0] === "ping-send err=E_DELIVERY_FAILED" &&
     failed.logs[0].indexOf(failPhrase) === -1 &&
-    failed.logs[0].indexOf(PING_KEY) === -1,
+    failed.logs[0].indexOf(PING_KEY) === -1 &&
+    failed.logs[0].indexOf(PING_TO) === -1 &&
+    failed.logs[0].indexOf(PING_FROM) === -1 &&
+    failed.logs[0].indexOf("@") === -1,
   "POST /ping send failure logs code only"
 );
 

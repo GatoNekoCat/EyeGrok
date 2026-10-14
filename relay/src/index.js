@@ -397,10 +397,19 @@ function subjectText(text) {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+// Missing, non-string, shorter than 3, or '@' not past the first character.
+function emailVarOrEmpty(value) {
+  const addr = typeof value === "string" ? value : "";
+  if (addr.length < 3 || addr.indexOf("@") < 1) return "";
+  return addr;
+}
+
 function pingFromOrEmpty(env) {
-  const from = typeof env.PING_FROM === "string" ? env.PING_FROM : "";
-  if (from.length < 3 || from.indexOf("@") < 1) return "";
-  return from;
+  return emailVarOrEmpty(env.PING_FROM);
+}
+
+function pingToOrEmpty(env) {
+  return emailVarOrEmpty(env.PING_TO);
 }
 
 async function postPing(request, env) {
@@ -412,7 +421,9 @@ async function postPing(request, env) {
   }
   if (!env.EMAIL) return json(503, { error: "ping-off" });
   const from = pingFromOrEmpty(env);
-  if (!from) return json(503, { error: "ping-off" });
+  if (!from) return json(503, { error: "ping-off", reason: "ping-from" });
+  const to = pingToOrEmpty(env);
+  if (!to) return json(503, { error: "ping-off", reason: "ping-to" });
   if (!timingSafeEqualString(presentedToken(request), pingKey)) return json(401, {});
 
   const declared = request.headers.get("content-length");
@@ -438,8 +449,8 @@ async function postPing(request, env) {
   if (textBytes > MAX_TEXT_BYTES) return json(413, {});
 
   try {
-    // Leave `to` unset. Email Service uses the binding's destination_address.
     await env.EMAIL.send({
+      to: env.PING_TO,
       from: { email: from, name: "EyeGrok" },
       subject: "EyeGrok ping " + body.nonce + " " + subjectText(body.text),
       text: JSON.stringify({ nonce: body.nonce, text: body.text }),

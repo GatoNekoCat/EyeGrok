@@ -32,6 +32,8 @@ Before you send the line, the human opens EyeGrok on the Frame and leaves it ope
 
 The hands-free trigger is a Grok Bot routine with an email trigger on this bot's own Grok Bot inbox. The relay `POST /ping` checks `Authorization: Bearer` against `PING_KEY`, then emails that inbox with a `send_email` binding. The subject is `EyeGrok ping <nonce> <base64url text>`.
 
+The Worker sends that email from `PING_FROM` to `PING_TO`. Both are vars in the relay config. Each must contain `@`. Committed examples are `ping@example.invalid` and `REPLACE_ME@example.invalid` only. If `PING_FROM` is missing or invalid, `POST /ping` returns 503 `{"error":"ping-off","reason":"ping-from"}`. If `PING_TO` is missing or invalid, the reason is `ping-to`. The response and the logs do not include either address. Do not put a real address in chat or in a file in this repo.
+
 The headset does not send that mail. It POSTs `{"text","nonce"}` to `webhookUrl` with header `Authorization: Bearer` and `webhookKey`. It then reads the reply from `relayUrl` with `relayReadKey`. Read the nonce and the base64url text from the subject. Decode the text. POST the reply to the relay `/reply` with the write key. The reply draft is docs/ROUTINE_TEMPLATE.md. Tell the human to hold to talk, then read the text that comes back from the relay.
 
 ## Coming next
