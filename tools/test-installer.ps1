@@ -410,7 +410,9 @@ Write-Trace "after i2"
 
 $dummy = Join-Path $env:TEMP ("eyegrok-dummy-" + [guid]::NewGuid().ToString("N") + ".apk")
 [System.IO.File]::WriteAllText($dummy, "dummy")
-$usbJson = '{"webhookUrl":"https://example.com/hook","webhookKey":"0123456789abcdef","relayUrl":"https://example.com/relay","relayReadKey":"fedcba9876543210"}'
+$hookKey = "0123456789abcdef0123456789abcdef"
+$readKey = "fedcba9876543210fedcba9876543210"
+$usbJson = '{"webhookUrl":"https://example.com/hook","webhookKey":"' + $hookKey + '","relayUrl":"https://example.com/relay","relayReadKey":"' + $readKey + '"}'
 $cases = @(
     @{ Name = "nodevice"; Mode = "frame"; Extra = @(); Stdin = $null; Key = "E_NO_FRAME"; Text = "No Frame found." },
     @{ Name = "unauthorized"; Mode = "frame"; Extra = @(); Stdin = $null; Key = "E_UNAUTHORIZED"; Text = "has not allowed this PC" },
@@ -423,7 +425,7 @@ foreach ($case in $cases) {
     try {
         $args = @("-Headless", "-Mode", $case.Mode) + $case.Extra
         $run = Invoke-SetupChild -EgHome $caseHome -PathValue $filtered -Adb $Fake -Scenario $case.Name -Arguments $args -Stdin $case.Stdin
-        Save-Proof ("i3-" + $case.Name + ".txt") ($run.Stdout + "`n" + $run.Stderr) @("0123456789abcdef", "fedcba9876543210")
+        Save-Proof ("i3-" + $case.Name + ".txt") ($run.Stdout + "`n" + $run.Stderr) @($hookKey, $readKey)
         if ($run.Code -eq 0) { throw "exit 0" }
         Assert-Contains $run.Stdout $case.Key "key"
         Assert-Contains $run.Stdout $case.Text "text"
@@ -436,6 +438,51 @@ foreach ($case in $cases) {
     }
 }
 Write-Trace "after i3"
+
+$shortJson = '{"webhookUrl":"https://example.com/hook","webhookKey":"0123456789abcdef","relayUrl":"https://example.com/relay","relayReadKey":"' + $readKey + '"}'
+$launcher = "io.github.eyegrok.ping/com.unity3d.player.UnityPlayerActivity"
+$sliceCases = @(
+    @{ Id = "AT-B1"; Name = "happy"; Stdin = $usbJson; Ok = $true; NeedImport = $true },
+    @{ Id = "AT-B2"; Name = "partleft"; Stdin = $usbJson; Ok = $false; Key = "E_IMPORT_FAILED"; Text = "was not renamed" },
+    @{ Id = "AT-B3"; Name = "notconsumed"; Stdin = $usbJson; Ok = $false; Key = "E_IMPORT"; Text = "did not take the setup" },
+    @{ Id = "AT-B4"; Name = "happy"; Stdin = $usbJson; Ok = $true; NeedAm = $true },
+    @{ Id = "AT-B5"; Name = "happy"; Stdin = $shortJson; Ok = $false; Key = "BAD values"; Text = "The webhook key must be at least 32 characters." }
+)
+foreach ($case in $sliceCases) {
+    $caseHome = New-WorkHome $case.Id
+    try {
+        $setupArgs = @("-Headless", "-PairMode", "usb", "-ApkPath", $dummy)
+        $run = Invoke-SetupChild -EgHome $caseHome -PathValue $filtered -Adb $Fake -Scenario $case.Name -Arguments $setupArgs -Stdin $case.Stdin
+        Save-Proof ($case.Id + ".txt") ($run.Stdout + "`n" + $run.Stderr) @($hookKey, $readKey, "0123456789abcdef")
+        $calls = ""
+        $callPath = Join-Path $caseHome "fake-adb-calls.txt"
+        if (Test-Path -LiteralPath $callPath) { $calls = [System.IO.File]::ReadAllText($callPath) }
+        if ($case.Ok) {
+            if ($run.Code -ne 0) { throw "exit" }
+            if ($run.Stdout.IndexOf("Imported") -lt 0) { throw "imported" }
+            if ($run.Stdout.IndexOf("`nOK") -lt 0 -and -not $run.Stdout.TrimEnd().EndsWith("OK")) { throw "ok" }
+        } else {
+            if ($run.Code -eq 0) { throw "exit 0" }
+            Assert-Contains $run.Stdout ([string]$case.Key) "key"
+            Assert-Contains $run.Stdout ([string]$case.Text) "text"
+            if ($run.Stdout.IndexOf("Imported") -ge 0) { throw "imported" }
+        }
+        if ($case.NeedImport) {
+            if ($run.Stdout.IndexOf("STEP import") -lt 0) { throw "step import" }
+        }
+        if ($case.NeedAm) {
+            if ($calls.IndexOf("am start -n " + $launcher) -lt 0) { throw "am start" }
+            if ($calls.ToLowerInvariant().IndexOf("monkey") -ge 0) { throw "monkey" }
+        }
+        [void]$notes.Add($case.Id + " PASS")
+    } catch {
+        $fail = 1
+        [void]$notes.Add($case.Id + " FAIL " + [string]$_.Exception.Message)
+    } finally {
+        Remove-WorkHome $caseHome
+    }
+}
+Write-Trace "after b"
 
 function Get-CallLog([string]$WorkHome) {
     $path = Join-Path $WorkHome "fake-adb-calls.txt"
@@ -596,7 +643,7 @@ if ($deviceSkip) {
 }
 Write-Trace "after i1"
 
-# AT-I4 happy path, then AT-I5 and AT-I6 sentinel scans. PAIR_KEY is 32 chars so the relay accepts it.
+# AT-I4 happy path, then AT-I5 and AT-I6 sentinel scans. Webhook, relay read, and pair keys are at least 32 characters.
 Import-Module (Join-Path $RepoRoot "installer\lib\Core.psm1") -Force
 . (Join-Path $RepoRoot "installer\lib\PairCrypto.ps1")
 $relayProc = $null
@@ -604,8 +651,8 @@ $relayCmdPid = 0
 $happyHome = $null
 $stage = "AT-I4"
 $scanStart = Get-Date
-$hookSent = New-Sentinel 24
-$readSent = New-Sentinel 24
+$hookSent = New-Sentinel 26
+$readSent = New-Sentinel 26
 $pathSent = New-Sentinel 24
 $pairSent = New-Sentinel 26
 $needles = @($hookSent, $readSent, $pathSent, $pairSent)

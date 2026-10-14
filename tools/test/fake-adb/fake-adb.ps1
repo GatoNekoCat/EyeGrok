@@ -9,6 +9,8 @@ if (-not $egHome) { $egHome = Join-Path $env:TEMP "eyegrok-fake-adb" }
 New-Item -ItemType Directory -Force -Path $egHome | Out-Null
 $scenario = $env:EYEGROK_FAKE_ADB_SCENARIO
 if (-not $scenario) { $scenario = "nodevice" }
+$finalFlag = Join-Path $egHome "fake-final.txt"
+$partFlag = Join-Path $egHome "fake-part.txt"
 $log = Join-Path $egHome "fake-adb-calls.txt"
 $line = ($args -join " ")
 [System.IO.File]::AppendAllText($log, $line + "`n", (New-Object System.Text.UTF8Encoding $false))
@@ -26,6 +28,16 @@ function Read-StdinBytes {
     return $all.ToArray()
 }
 
+function Set-SetupFileState {
+    if ($scenario -eq "partleft") {
+        [System.IO.File]::WriteAllText($partFlag, "1", (New-Object System.Text.UTF8Encoding $false))
+        if (Test-Path -LiteralPath $finalFlag) { Remove-Item -LiteralPath $finalFlag -Force }
+        return
+    }
+    [System.IO.File]::WriteAllText($finalFlag, "1", (New-Object System.Text.UTF8Encoding $false))
+    if (Test-Path -LiteralPath $partFlag) { Remove-Item -LiteralPath $partFlag -Force }
+}
+
 if ($joined -match "exec-in" -or ($joined -match "shell" -and $joined -match "cat >")) {
     $bytes = Read-StdinBytes
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -35,9 +47,7 @@ if ($joined -match "exec-in" -or ($joined -match "shell" -and $joined -match "ca
         $sha.Dispose()
     }
     Write-Output ("STDIN_SHA256=" + $hash)
-    if ($scenario -eq "happy" -and $joined -match "eyegrok-setup.json") {
-        [System.IO.File]::WriteAllText((Join-Path $egHome "fake-imported.txt"), "1")
-    }
+    if ($joined -match "eyegrok-setup\.json") { Set-SetupFileState }
     exit 0
 }
 
@@ -73,12 +83,26 @@ if ($joined -match "(^| )install( |$)") {
 }
 
 if ($joined -match "(^| )ls( |$)") {
-    $flag = Join-Path $egHome "fake-imported.txt"
-    if ((Test-Path -LiteralPath $flag) -or $scenario -eq "nodevice") {
-        Write-Output "ls: No such file or directory"
-        exit 1
+    $isPart = $joined -match "eyegrok-setup\.json\.part"
+    $flag = $finalFlag
+    $shown = "/sdcard/Android/data/io.github.eyegrok.ping/files/eyegrok-setup.json"
+    if ($isPart) {
+        $flag = $partFlag
+        $shown = $shown + ".part"
     }
-    Write-Output "/sdcard/Android/data/io.github.eyegrok.ping/files/eyegrok-setup.json"
+    if (Test-Path -LiteralPath $flag) {
+        Write-Output $shown
+        exit 0
+    }
+    Write-Output "ls: No such file or directory"
+    exit 1
+}
+
+if ($joined -match "(^| )am( |$)" -and $joined -match "(^| )start( |$)") {
+    if ($scenario -eq "happy") {
+        if (Test-Path -LiteralPath $finalFlag) { Remove-Item -LiteralPath $finalFlag -Force }
+        if (Test-Path -LiteralPath $partFlag) { Remove-Item -LiteralPath $partFlag -Force }
+    }
     exit 0
 }
 

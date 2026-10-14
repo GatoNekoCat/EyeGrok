@@ -9,8 +9,7 @@ param(
     [switch]$AllowLoopbackHttp,
     [switch]$CapturePairing,
     [switch]$PushOrigin,
-    [ValidateSet("frame", "full")]
-    [string]$Mode = "frame",
+    [string]$Mode = "full",
     [ValidateSet("qr", "code", "usb", "all")]
     [string]$PairMode = "usb",
     [string]$ApkPath,
@@ -23,6 +22,11 @@ $ErrorActionPreference = "Stop"
 
 if ($ExecutionContext.SessionState.LanguageMode -ne "FullLanguage") {
     Write-Output "PowerShell is in Constrained Language Mode. EyeGrok Setup cannot run."
+    exit 2
+}
+
+if ($Mode -ne "full" -and $Mode -ne "frame") {
+    Write-Output "Unknown mode. Use -Mode full or -Mode frame."
     exit 2
 }
 
@@ -61,6 +65,25 @@ function Read-SetupLine {
     $line = [Console]::In.ReadLine()
     if (-not $line) { return $null }
     return ($line | ConvertFrom-Json)
+}
+
+function Get-ValueProblem {
+    param($Values, [bool]$AllowLoopback, [bool]$RequirePairKey)
+    $field = Test-SetupValues -Values $Values -AllowLoopbackHttp:$AllowLoopback
+    if ($field -eq "webhookKey") {
+        return (Get-SetupKeyError -Key ([string]$Values.webhookKey) -Label "The webhook key")
+    }
+    if ($field -eq "relayReadKey") {
+        return (Get-SetupKeyError -Key ([string]$Values.relayReadKey) -Label "The relay read key")
+    }
+    if ($field) { return "Check the values." }
+    $pairText = ""
+    if ($null -ne $Values) { $pairText = [string]$Values.pairKey }
+    if ($RequirePairKey -or $pairText.Length -gt 0) {
+        $pairError = Get-SetupKeyError -Key $pairText -Label "The pair key"
+        if ($pairError) { return $pairError }
+    }
+    return $null
 }
 
 function Publish-OnePairing {
@@ -145,6 +168,11 @@ function Invoke-Headless {
         Stop-Headless 0
         return
     }
+    if ($Mode -ne "full") {
+        Write-Output "Unknown mode. Use -Mode full or -Mode frame."
+        Stop-Headless 2
+        return
+    }
 
     Write-Output "STEP install"
     $apk = Find-InstallerApk
@@ -165,25 +193,19 @@ function Invoke-Headless {
 
     Write-Output "STEP values"
     $values = Read-SetupLine
-    $bad = Test-SetupValues -Values $values -AllowLoopbackHttp:$AllowLoopbackHttp
-    if ($bad) {
+    $needsRelay = $false
+    if ($PairMode -eq "qr" -or $PairMode -eq "code" -or $PairMode -eq "all") { $needsRelay = $true }
+    $problem = Get-ValueProblem -Values $values -AllowLoopback $AllowLoopbackHttp -RequirePairKey $needsRelay
+    if ($problem) {
         Write-InstallerLog "values" 2 "bad"
         Write-Output "BAD values"
+        Write-Output $problem
         Stop-Headless 2
         return
     }
     $json = ConvertTo-SetupJson $values
     $relay = [string]$values.relayUrl
     $pairKey = [string]$values.pairKey
-    $needsRelay = $false
-    if ($PairMode -eq "qr" -or $PairMode -eq "code" -or $PairMode -eq "all") { $needsRelay = $true }
-    if ($needsRelay -and -not (Test-KeyValue $pairKey)) {
-        Write-InstallerLog "pair" 2 "E_PAIR_KEY"
-        Write-Output "E_PAIR_KEY"
-        Write-Output (Get-EyeGrokErrorText -Key "E_PAIR_KEY")
-        Stop-Headless 2
-        return
-    }
 
     $doQr = $false
     $doCode = $false
@@ -235,8 +257,8 @@ function Invoke-Headless {
             Write-Output ("STDIN_SHA256=" + $Matches[1].ToLower())
         }
         if ($pushed.Key -ne "OK") {
-            Write-Output "E_IMPORT"
-            Write-Output (Get-EyeGrokErrorText -Key "E_IMPORT")
+            Write-Output $pushed.Key
+            Write-Output (Get-EyeGrokErrorText -Key $pushed.Key)
             Stop-Headless 2
             return
         }
@@ -682,9 +704,9 @@ function Show-Pair {
 
     $newQr.Add_Click({
         $values = Read-BoxValues
-        $bad = Test-SetupValues -Values $values -AllowLoopbackHttp:$AllowLoopbackHttp
-        if ($bad -or -not (Test-KeyValue ([string]$values.pairKey))) {
-            Set-Status "Check the values."
+        $problem = Get-ValueProblem -Values $values -AllowLoopback $AllowLoopbackHttp -RequirePairKey $true
+        if ($problem) {
+            Set-Status $problem
             return
         }
         Clear-LivePairing
@@ -704,9 +726,9 @@ function Show-Pair {
     })
     $newCode.Add_Click({
         $values = Read-BoxValues
-        $bad = Test-SetupValues -Values $values -AllowLoopbackHttp:$AllowLoopbackHttp
-        if ($bad -or -not (Test-KeyValue ([string]$values.pairKey))) {
-            Set-Status "Check the values."
+        $problem = Get-ValueProblem -Values $values -AllowLoopback $AllowLoopbackHttp -RequirePairKey $true
+        if ($problem) {
+            Set-Status $problem
             return
         }
         if ($script:NeverPaired.Checked) {
@@ -730,14 +752,14 @@ function Show-Pair {
     })
     $push.Add_Click({
         $values = Read-BoxValues
-        $bad = Test-SetupValues -Values $values -AllowLoopbackHttp:$AllowLoopbackHttp
-        if ($bad) {
-            Set-Status "Check the values."
+        $problem = Get-ValueProblem -Values $values -AllowLoopback $AllowLoopbackHttp -RequirePairKey $false
+        if ($problem) {
+            Set-Status $problem
             return
         }
         $json = ConvertTo-SetupJson $values
         $pushed = Send-SetupOverAdb -Json $json
-        if ($pushed.Key -eq "OK") { Set-Status "Imported" } else { Set-Status "Not imported" }
+        if ($pushed.Key -eq "OK") { Set-Status "Imported" } else { Set-Status (Get-EyeGrokErrorText -Key $pushed.Key) }
     })
     Set-Status "Choose a pairing tab."
 }

@@ -10,6 +10,9 @@ $script:PlatformToolsUrl = "https://dl.google.com/android/repository/platform-to
 # SHA-1 of that zip, from dl.google.com/android/repository/repository2-3.xml (platform-tools 37.0.1, windows).
 $script:PlatformToolsSha1 = "e03e78b1d80b396f1c3358e31251cb31740e1110"
 $script:PackageId = "io.github.eyegrok.ping"
+# Launcher from unity/Assets/Plugins/Android/AndroidManifest.xml.
+# BuildSettingsApplier sets AndroidApplicationEntry.Activity, which is this class.
+$script:LauncherActivity = "com.unity3d.player.UnityPlayerActivity"
 $script:LibDir = $PSScriptRoot
 
 . (Join-Path $script:LibDir "PairCrypto.ps1")
@@ -68,6 +71,9 @@ function Get-EyeGrokErrorText {
     }
     if ($Key -eq "E_IMPORT") {
         return "The headset did not take the setup. Open EyeGrok on the Frame and try again, or use another pairing tab."
+    }
+    if ($Key -eq "E_IMPORT_FAILED") {
+        return "The setup file was not renamed on the headset. eyegrok-setup.json.part is still there, or eyegrok-setup.json is missing."
     }
     if ($Key -eq "E_PAIR_OFF") {
         return "Pairing is off on your relay. Add PAIR_KEY (see docs/RELAY.md), or use the USB push tab."
@@ -487,12 +493,20 @@ function Test-HttpsOrLoopback {
     return $false
 }
 
+function Get-SetupKeyError {
+    param([string]$Key, [string]$Label)
+    if (-not $Label) { $Label = "The key" }
+    if (-not $Key -or $Key.Length -lt 32) { return $Label + " must be at least 32 characters." }
+    if ($Key.Length -gt 512) { return $Label + " must be at most 512 characters." }
+    foreach ($ch in $Key.ToCharArray()) {
+        if ([char]::IsWhiteSpace($ch)) { return $Label + " must not contain spaces." }
+    }
+    return $null
+}
+
 function Test-KeyValue {
     param([string]$Key)
-    if (-not $Key -or $Key.Length -lt 16 -or $Key.Length -gt 512) { return $false }
-    foreach ($ch in $Key.ToCharArray()) {
-        if ([char]::IsWhiteSpace($ch)) { return $false }
-    }
+    if (Get-SetupKeyError -Key $Key -Label "The key") { return $false }
     return $true
 }
 
@@ -595,25 +609,53 @@ function Clear-B3TempFile {
     Remove-Item -LiteralPath $Path -Force
 }
 
+function Test-RemoteFilePresent {
+    param([string]$Serial, [string]$RemotePath)
+    $listing = Invoke-Adb -ArgumentList @("-s", $Serial, "shell", "ls", $RemotePath)
+    if ($listing.Code -ne 0) { return $false }
+    $base = $RemotePath
+    $slash = $RemotePath.LastIndexOf("/")
+    if ($slash -ge 0) { $base = $RemotePath.Substring($slash + 1) }
+    foreach ($line in ([string]$listing.Stdout -split "`n")) {
+        $trim = $line.Trim()
+        if ($trim -eq $RemotePath -or $trim -eq $base) { return $true }
+    }
+    return $false
+}
+
 function Send-SetupOverAdb {
     param([string]$Json)
     $remote = "/sdcard/Android/data/" + $script:PackageId + "/files/eyegrok-setup.json"
+    $part = $remote + ".part"
     $bytes = New-Object System.Text.UTF8Encoding $false
     $sent = Send-StreamOverAdb -RemotePath $remote -Bytes ($bytes.GetBytes($Json))
-    $imported = $false
+    $stdout = ""
+    if ($sent.Result) { $stdout = [string]$sent.Result.Stdout }
     $serial = Get-FrameSerial
+    # A missing final file before launch is a failed rename, not a consumed import.
+    $finalThere = Test-RemoteFilePresent -Serial $serial -RemotePath $remote
+    $partThere = Test-RemoteFilePresent -Serial $serial -RemotePath $part
+    if ($partThere -or -not $finalThere) {
+        Write-InstallerLog "import" 1 "E_IMPORT_FAILED"
+        return @{ Key = "E_IMPORT_FAILED"; Stdout = $stdout }
+    }
+    $component = $script:PackageId + "/" + $script:LauncherActivity
+    [void](Invoke-Adb -ArgumentList @("-s", $serial, "shell", "am", "start", "-n", $component))
+    $consumed = $false
     for ($i = 0; $i -lt 20; $i++) {
-        $listing = Invoke-Adb -ArgumentList @("-s", $serial, "shell", "ls", $remote)
-        $out = $listing.Stdout
-        if ($listing.Code -ne 0 -or $out -notmatch "eyegrok-setup.json") {
-            $imported = $true
+        $finalThere = Test-RemoteFilePresent -Serial $serial -RemotePath $remote
+        $partThere = Test-RemoteFilePresent -Serial $serial -RemotePath $part
+        if ($partThere) {
+            Write-InstallerLog "import" 1 "E_IMPORT_FAILED"
+            return @{ Key = "E_IMPORT_FAILED"; Stdout = $stdout }
+        }
+        if (-not $finalThere) {
+            $consumed = $true
             break
         }
         Start-Sleep -Milliseconds 250
     }
-    $stdout = ""
-    if ($sent.Result) { $stdout = [string]$sent.Result.Stdout }
-    if ($imported) {
+    if ($consumed) {
         Write-InstallerLog "import" 0 ""
         return @{ Key = "OK"; Stdout = $stdout }
     }
@@ -684,6 +726,7 @@ Export-ModuleMember -Function @(
     "Install-EyeGrokApk",
     "ConvertTo-SetupJson",
     "Test-SetupValues",
+    "Get-SetupKeyError",
     "Test-KeyValue",
     "New-PairingEntry",
     "Remove-PairingEntry",
