@@ -641,8 +641,10 @@ function Send-SetupOverAdb {
     }
     $component = $script:PackageId + "/" + $script:LauncherActivity
     [void](Invoke-Adb -ArgumentList @("-s", $serial, "shell", "am", "start", "-n", $component))
+    # Wall-clock budget, not a fixed call count. A slow adb still returns the error.
     $consumed = $false
-    for ($i = 0; $i -lt 20; $i++) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ($true) {
         $finalThere = Test-RemoteFilePresent -Serial $serial -RemotePath $remote
         $partThere = Test-RemoteFilePresent -Serial $serial -RemotePath $part
         if ($partThere) {
@@ -653,7 +655,11 @@ function Send-SetupOverAdb {
             $consumed = $true
             break
         }
-        Start-Sleep -Milliseconds 250
+        $remain = ($deadline - [DateTime]::UtcNow).TotalMilliseconds
+        if ($remain -le 50) { break }
+        $nap = 250
+        if ($remain -lt $nap) { $nap = [int]$remain }
+        if ($nap -gt 0) { Start-Sleep -Milliseconds $nap }
     }
     if ($consumed) {
         Write-InstallerLog "import" 0 ""

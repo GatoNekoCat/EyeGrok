@@ -565,15 +565,22 @@ $scripts = @(
     "installer\lib\PairCrypto.ps1",
     "installer\lib\QrEncoder.ps1"
 )
+$i7ok = $true
+$i8ok = $true
 foreach ($rel in $scripts) {
     $path = Join-Path $RepoRoot $rel
     $tokens = $null
     $errs = $null
     [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errs)
-    if ($errs -and $errs.Count -gt 0) { $fail = 1; [void]$notes.Add("AT-I8 FAIL " + $rel) }
+    if ($errs -and $errs.Count -gt 0) {
+        $fail = 1
+        $i8ok = $false
+        [void]$notes.Add("AT-I8 FAIL " + $rel)
+    }
     $text = [System.IO.File]::ReadAllText($path)
     if ($text.Contains("Start-Transcript") -or $text.Contains("Add-Type") -or $text.Contains("Invoke-Expression") -or $text.Contains("#requires -Version 7") -or $text.Contains("??") -or $text.Contains("?.")) {
         $fail = 1
+        $i7ok = $false
         [void]$notes.Add("AT-I7 FAIL " + $rel)
     }
     $hosts = [regex]::Matches($text, "https?://[A-Za-z0-9._-]+")
@@ -587,11 +594,13 @@ foreach ($rel in $scripts) {
         if ($hostName.StartsWith("http://localhost")) { $allowed = $true }
         if (-not $allowed) {
             $fail = 1
+            $i7ok = $false
             [void]$notes.Add("AT-I7 HOST FAIL")
         }
     }
 }
-if ($fail -eq 0) { [void]$notes.Add("AT-I7 PASS"); [void]$notes.Add("AT-I8 PASS") }
+if ($i7ok) { [void]$notes.Add("AT-I7 PASS") }
+if ($i8ok) { [void]$notes.Add("AT-I8 PASS") }
 
 $deviceSkip = $false
 $sysAdb = Get-Command adb -ErrorAction SilentlyContinue
@@ -626,12 +635,20 @@ if ($deviceSkip) {
         Save-Proof "i1-fresh.txt" ($run.Stdout + "`n" + $run.Stderr) $null
         $adbExe = Join-Path $fresh "platform-tools\adb.exe"
         if (-not (Test-Path -LiteralPath $adbExe)) { throw "adb missing" }
+        if ($run.Stdout.IndexOf("STEP frame") -lt 0) { throw "step frame" }
         $frameHit = $false
         foreach ($token in @("E_NO_FRAME", "E_WIFI_NOHOST", "E_WIFI_UNREACHABLE", "E_LEPTON_NOT_RUNNING")) {
             if ($run.Stdout.IndexOf($token) -ge 0) { $frameHit = $true }
         }
-        if (-not $frameHit) { throw "expected frame error" }
-        if ($run.Code -eq 0) { throw "fresh exit 0" }
+        # -Mode frame stops after the link. A reachable headset named frame exits 0 with OK.
+        $endedOk = $run.Stdout.TrimEnd().EndsWith("OK")
+        if ($frameHit) {
+            if ($run.Code -eq 0) { throw "fresh exit 0" }
+        } elseif ($endedOk) {
+            if ($run.Code -ne 0) { throw "fresh exit" }
+        } else {
+            throw "expected frame result"
+        }
         Invoke-Silent -File $adbExe -Arguments "kill-server"
         [void]$notes.Add("AT-I1 PASS")
     } catch {
