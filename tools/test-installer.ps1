@@ -16,7 +16,11 @@ $Fake = Join-Path $RepoRoot "tools\test\fake-adb\adb.cmd"
 $Pwsh = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 function Invoke-Silent {
-    param([string]$File, [string]$Arguments)
+    param(
+        [string]$File,
+        [string]$Arguments,
+        [hashtable]$Environment
+    )
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $File
     $psi.Arguments = $Arguments
@@ -24,6 +28,11 @@ function Invoke-Silent {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
+    if ($Environment) {
+        foreach ($key in @($Environment.Keys)) {
+            $psi.EnvironmentVariables[[string]$key] = [string]$Environment[$key]
+        }
+    }
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
     try {
@@ -34,6 +43,91 @@ function Invoke-Silent {
         [void]$outTask.Wait(2000)
         [void]$errTask.Wait(2000)
     } catch { }
+}
+
+function Add-HarnessTree {
+    param(
+        [int]$RootPid,
+        [System.Collections.Generic.List[int]]$Tracked,
+        [System.Collections.Generic.HashSet[int]]$Seen
+    )
+    if ($RootPid -le 0) { return }
+    $rows = @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)
+    $kids = @{}
+    foreach ($row in $rows) {
+        $parent = 0
+        $procId = 0
+        try {
+            $parent = [int]$row.ParentProcessId
+            $procId = [int]$row.ProcessId
+        } catch {
+            continue
+        }
+        if (-not $kids.ContainsKey($parent)) {
+            $kids[$parent] = New-Object System.Collections.Generic.List[int]
+        }
+        [void]$kids[$parent].Add($procId)
+    }
+    $pending = New-Object System.Collections.Generic.Queue[int]
+    $pending.Enqueue($RootPid)
+    while ($pending.Count -gt 0) {
+        $id = [int]$pending.Dequeue()
+        if ($id -le 0 -or $id -eq $PID) { continue }
+        if ($Seen.Contains($id)) { continue }
+        [void]$Seen.Add($id)
+        [void]$Tracked.Add($id)
+        if ($kids.ContainsKey($id)) {
+            foreach ($child in $kids[$id]) { $pending.Enqueue([int]$child) }
+        }
+    }
+}
+
+function Stop-HarnessPids {
+    param([System.Collections.Generic.List[int]]$Tracked)
+    if ($null -eq $Tracked) { return }
+    for ($i = $Tracked.Count - 1; $i -ge 0; $i--) {
+        $id = [int]$Tracked[$i]
+        if ($id -le 0 -or $id -eq $PID) { continue }
+        try {
+            $target = Get-Process -Id $id -ErrorAction SilentlyContinue
+            if ($null -ne $target) { $target.Kill() }
+        } catch { }
+    }
+}
+
+function Get-FreePrivateAdbPort {
+    $rng = New-Object System.Random
+    $used = @{}
+    try {
+        $listeners = @([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners())
+        foreach ($ep in $listeners) {
+            try { $used[[int]$ep.Port] = $true } catch { }
+        }
+    } catch { }
+    for ($try = 0; $try -lt 40; $try++) {
+        $port = $rng.Next(20000, 30000)
+        if ($used.ContainsKey($port)) { continue }
+        $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $port)
+        try {
+            $probe.Start()
+            $probe.Stop()
+            return $port
+        } catch {
+        } finally {
+            try { $probe.Stop() } catch { }
+        }
+    }
+    throw "no free adb port"
+}
+
+function Stop-PrivateAdb {
+    param([string]$AdbExe, [string]$Port)
+    if (-not $Port) { return }
+    $n = 0
+    if (-not [int]::TryParse($Port, [ref]$n)) { return }
+    if ($n -lt 20000 -or $n -gt 29999) { return }
+    if (-not (Test-Path -LiteralPath $AdbExe)) { return }
+    Invoke-Silent -File $AdbExe -Arguments "kill-server" -Environment @{ ANDROID_ADB_SERVER_PORT = "$n" }
 }
 
 function ConvertTo-Redacted([string]$Text, [string[]]$Needles) {
@@ -75,7 +169,8 @@ function Invoke-SetupChild {
         [string]$Adb,
         [string]$Scenario,
         [string[]]$Arguments,
-        [string]$Stdin
+        [string]$Stdin,
+        [string]$AdbServerPort
     )
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Pwsh
@@ -91,6 +186,7 @@ function Invoke-SetupChild {
     if ($EgHome) { $psi.EnvironmentVariables["EYEGROK_HOME"] = $EgHome }
     if ($Adb) { $psi.EnvironmentVariables["EYEGROK_ADB"] = $Adb } else { $psi.EnvironmentVariables.Remove("EYEGROK_ADB") }
     if ($Scenario) { $psi.EnvironmentVariables["EYEGROK_FAKE_ADB_SCENARIO"] = $Scenario }
+    if ($AdbServerPort) { $psi.EnvironmentVariables["ANDROID_ADB_SERVER_PORT"] = $AdbServerPort }
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
     [void]$proc.Start()
@@ -100,14 +196,38 @@ function Invoke-SetupChild {
     $proc.StandardInput.Close()
     $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
     $stderrTask = $proc.StandardError.ReadToEndAsync()
-    $exited = $proc.WaitForExit(240000)
+    $tracked = New-Object System.Collections.Generic.List[int]
+    $seen = New-Object "System.Collections.Generic.HashSet[int]"
+    $exited = $false
+    if ($AdbServerPort) {
+        Add-HarnessTree ([int]$proc.Id) $tracked $seen
+        $deadline = (Get-Date).AddMilliseconds(240000)
+        while ((Get-Date) -lt $deadline) {
+            if ($proc.WaitForExit(1500)) { $exited = $true; break }
+            Add-HarnessTree ([int]$proc.Id) $tracked $seen
+        }
+    } else {
+        $exited = $proc.WaitForExit(240000)
+        if ([int]$proc.Id -ne $PID) {
+            [void]$seen.Add([int]$proc.Id)
+            [void]$tracked.Add([int]$proc.Id)
+        }
+    }
     if (-not $exited) {
+        if ($AdbServerPort) { Add-HarnessTree ([int]$proc.Id) $tracked $seen }
+        Stop-HarnessPids $tracked
         Invoke-Silent -File "$env:SystemRoot\System32\taskkill.exe" -Arguments ("/PID " + $proc.Id + " /T /F")
-        Get-Process -Name adb -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch { } }
+        if ($AdbServerPort -and $EgHome) {
+            Stop-PrivateAdb -AdbExe (Join-Path $EgHome "platform-tools\adb.exe") -Port $AdbServerPort
+        }
         $proc.WaitForExit(5000) | Out-Null
     }
     if (-not $stdoutTask.Wait(5000)) {
-        Get-Process -Name adb -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch { } }
+        if ($AdbServerPort) { Add-HarnessTree ([int]$proc.Id) $tracked $seen }
+        Stop-HarnessPids $tracked
+        if ($AdbServerPort -and $EgHome) {
+            Stop-PrivateAdb -AdbExe (Join-Path $EgHome "platform-tools\adb.exe") -Port $AdbServerPort
+        }
         [void]$stdoutTask.Wait(5000)
     }
     if (-not $stderrTask.Wait(5000)) { [void]$stderrTask.Wait(3000) }
@@ -602,61 +722,31 @@ foreach ($rel in $scripts) {
 if ($i7ok) { [void]$notes.Add("AT-I7 PASS") }
 if ($i8ok) { [void]$notes.Add("AT-I8 PASS") }
 
-$deviceSkip = $false
-$sysAdb = Get-Command adb -ErrorAction SilentlyContinue
-if ($sysAdb) {
-    $listed = ""
-    $adbPsi = New-Object System.Diagnostics.ProcessStartInfo
-    $adbPsi.FileName = $sysAdb.Source
-    $adbPsi.Arguments = "devices"
-    $adbPsi.UseShellExecute = $false
-    $adbPsi.RedirectStandardOutput = $true
-    $adbPsi.RedirectStandardError = $true
-    $adbPsi.CreateNoWindow = $true
-    $adbProc = New-Object System.Diagnostics.Process
-    $adbProc.StartInfo = $adbPsi
-    [void]$adbProc.Start()
-    if ($adbProc.WaitForExit(8000)) {
-        $listed = $adbProc.StandardOutput.ReadToEnd()
-    } else {
-        try { $adbProc.Kill() } catch { }
-    }
-    foreach ($line in ($listed -split "`n")) {
-        if ($line -match "\sdevice(\s|$)") { $deviceSkip = $true }
-    }
-}
-if ($deviceSkip) {
-    [void]$notes.Add("AT-I1 SKIP device attached")
-    Save-Proof "i1-fresh.txt" "SKIP a device was already attached" $null
-} else {
+$fresh = $null
+$adbPort = ""
+try {
     $fresh = New-WorkHome "fresh"
-    try {
-        $run = Invoke-SetupChild -EgHome $fresh -PathValue $filtered -Arguments @("-Headless", "-AcceptPlatformToolsLicense", "-Mode", "frame")
-        Save-Proof "i1-fresh.txt" ($run.Stdout + "`n" + $run.Stderr) $null
-        $adbExe = Join-Path $fresh "platform-tools\adb.exe"
-        if (-not (Test-Path -LiteralPath $adbExe)) { throw "adb missing" }
-        if ($run.Stdout.IndexOf("STEP frame") -lt 0) { throw "step frame" }
-        $frameHit = $false
-        foreach ($token in @("E_NO_FRAME", "E_WIFI_NOHOST", "E_WIFI_UNREACHABLE", "E_LEPTON_NOT_RUNNING")) {
-            if ($run.Stdout.IndexOf($token) -ge 0) { $frameHit = $true }
-        }
-        # -Mode frame stops after the link. A reachable headset named frame exits 0 with OK.
-        $endedOk = $run.Stdout.TrimEnd().EndsWith("OK")
-        if ($frameHit) {
-            if ($run.Code -eq 0) { throw "fresh exit 0" }
-        } elseif ($endedOk) {
-            if ($run.Code -ne 0) { throw "fresh exit" }
-        } else {
-            throw "expected frame result"
-        }
-        Invoke-Silent -File $adbExe -Arguments "kill-server"
-        [void]$notes.Add("AT-I1 PASS")
-    } catch {
-        $fail = 1
-        [void]$notes.Add("AT-I1 FAIL")
-    } finally {
-        Remove-WorkHome $fresh
+    $adbPort = [string](Get-FreePrivateAdbPort)
+    # 192.0.2.1 is TEST-NET (RFC 5737). adb connect to it times out, so the frame step cannot reach a headset.
+    $run = Invoke-SetupChild -EgHome $fresh -PathValue $filtered -AdbServerPort $adbPort -Arguments @(
+        "-Headless", "-AcceptPlatformToolsLicense", "-Mode", "frame", "-FrameHost", "192.0.2.1"
+    )
+    Save-Proof "i1-fresh.txt" ($run.Stdout + "`n" + $run.Stderr) $null
+    $adbExe = Join-Path $fresh "platform-tools\adb.exe"
+    if (-not (Test-Path -LiteralPath $adbExe)) { throw "adb missing" }
+    Assert-Contains $run.Stdout "LICENSE https://developer.android.com/tools/releases/platform-tools" "license"
+    Assert-Contains $run.Stdout "E_WIFI_UNREACHABLE" "frame key"
+    Assert-Contains $run.Stdout "The headset did not answer over Wi-Fi." "frame text"
+    if ($run.Code -eq 0) { throw "fresh exit 0" }
+    [void]$notes.Add("AT-I1 PASS")
+} catch {
+    $fail = 1
+    [void]$notes.Add("AT-I1 FAIL " + [string]$_.Exception.Message)
+} finally {
+    if ($adbPort -and $fresh) {
+        Stop-PrivateAdb -AdbExe (Join-Path $fresh "platform-tools\adb.exe") -Port $adbPort
     }
+    Remove-WorkHome $fresh
 }
 Write-Trace "after i1"
 
