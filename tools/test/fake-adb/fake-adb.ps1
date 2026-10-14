@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Test shim. Scenario comes from EYEGROK_FAKE_ADB_SCENARIO.
 # Records arguments only. Stdin is hashed and discarded.
+# Push to eyegrok-setup.json.part hashes the local file and sets the part flag.
+# mv renames only when both remote paths are single-quoted in one argument.
 
 $ErrorActionPreference = "Continue"
 $egHome = $env:EYEGROK_HOME
@@ -28,26 +30,74 @@ function Read-StdinBytes {
     return $all.ToArray()
 }
 
-function Set-SetupFileState {
-    if ($scenario -eq "partleft") {
-        [System.IO.File]::WriteAllText($partFlag, "1", (New-Object System.Text.UTF8Encoding $false))
-        if (Test-Path -LiteralPath $finalFlag) { Remove-Item -LiteralPath $finalFlag -Force }
-        return
-    }
+function Set-PartOnly {
+    [System.IO.File]::WriteAllText($partFlag, "1", (New-Object System.Text.UTF8Encoding $false))
+    if (Test-Path -LiteralPath $finalFlag) { Remove-Item -LiteralPath $finalFlag -Force }
+}
+
+function Set-Renamed {
     [System.IO.File]::WriteAllText($finalFlag, "1", (New-Object System.Text.UTF8Encoding $false))
     if (Test-Path -LiteralPath $partFlag) { Remove-Item -LiteralPath $partFlag -Force }
 }
 
-if ($joined -match "exec-in" -or ($joined -match "shell" -and $joined -match "cat >")) {
-    $bytes = Read-StdinBytes
+function Get-Sha256Hex {
+    param([byte[]]$Bytes)
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $hash = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLower()
+        return ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace("-", "").ToLower()
     } finally {
         $sha.Dispose()
     }
-    Write-Output ("STDIN_SHA256=" + $hash)
-    if ($joined -match "eyegrok-setup\.json") { Set-SetupFileState }
+}
+
+function Test-SetupMvArg {
+    param([string]$Text)
+    $part = "/sdcard/Android/data/io.github.eyegrok.ping/files/eyegrok-setup.json.part"
+    $dest = "/sdcard/Android/data/io.github.eyegrok.ping/files/eyegrok-setup.json"
+    $expected = "mv '" + $part + "' '" + $dest + "'"
+    return ($Text -eq $expected)
+}
+
+if ($joined -match "exec-in" -or ($joined -match "shell" -and $joined -match "cat >")) {
+    $bytes = Read-StdinBytes
+    Write-Output ("STDIN_SHA256=" + (Get-Sha256Hex $bytes))
+    if ($joined -match "eyegrok-setup\.json") { Set-PartOnly }
+    exit 0
+}
+
+# Quoted mv only, and only as one shell argument. Unquoted or split argv does not rename.
+$setupMv = $false
+foreach ($a in $args) {
+    if (Test-SetupMvArg ([string]$a)) { $setupMv = $true }
+}
+if ($setupMv) {
+    [System.IO.File]::AppendAllText($log, "MV_SINGLE`n", (New-Object System.Text.UTF8Encoding $false))
+    if ($scenario -eq "mvfail") { exit 1 }
+    if ($scenario -eq "mvzero") {
+        [Console]::Error.WriteLine("mv: cannot rename")
+        exit 0
+    }
+    if ($scenario -eq "partleft") { exit 0 }
+    Set-Renamed
+    exit 0
+}
+
+if ($joined -match "(^| )push( |$)") {
+    $local = ""
+    $remotePush = ""
+    for ($i = 0; $i -lt $args.Count; $i++) {
+        if ([string]$args[$i] -eq "push" -and ($i + 2) -lt $args.Count) {
+            $local = [string]$args[$i + 1]
+            $remotePush = [string]$args[$i + 2]
+        }
+    }
+    $setupPart = "/sdcard/Android/data/io.github.eyegrok.ping/files/eyegrok-setup.json.part"
+    if ($remotePush -eq $setupPart) {
+        Set-PartOnly
+        if ($local -and (Test-Path -LiteralPath $local)) {
+            Write-Output ("STDIN_SHA256=" + (Get-Sha256Hex ([System.IO.File]::ReadAllBytes($local))))
+        }
+    }
     exit 0
 }
 

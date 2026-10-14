@@ -623,16 +623,49 @@ function Test-RemoteFilePresent {
     return $false
 }
 
+function Test-RemoteShellFailed {
+    param($Result)
+    if ($null -eq $Result) { return $true }
+    $code = 1
+    try { $code = [int]$Result.Code } catch { return $true }
+    if ($code -ne 0) { return $true }
+    $text = ([string]$Result.Stdout) + "`n" + ([string]$Result.Stderr)
+    $lower = $text.ToLowerInvariant()
+    if ($lower.Contains("mv:")) { return $true }
+    if ($lower.Contains("cannot rename")) { return $true }
+    if ($lower.Contains("no such file")) { return $true }
+    if ($lower.Contains("permission denied")) { return $true }
+    if ($lower.Contains("read-only file system")) { return $true }
+    return $false
+}
+
 function Send-SetupOverAdb {
     param([string]$Json)
     $remote = "/sdcard/Android/data/" + $script:PackageId + "/files/eyegrok-setup.json"
     $part = $remote + ".part"
-    $bytes = New-Object System.Text.UTF8Encoding $false
-    $sent = Send-StreamOverAdb -RemotePath $remote -Bytes ($bytes.GetBytes($Json))
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    # Local file holds the setup keys. Wipe it as soon as push returns.
+    $temp = Write-B3TempFile ($utf8.GetBytes($Json))
     $stdout = ""
-    if ($sent.Result) { $stdout = [string]$sent.Result.Stdout }
     $serial = Get-FrameSerial
-    # A missing final file before launch is a failed rename, not a consumed import.
+    try {
+        $pushed = Invoke-Adb -ArgumentList @("-s", $serial, "push", $temp, $part)
+        if ($pushed) { $stdout = [string]$pushed.Stdout }
+    } finally {
+        Clear-B3TempFile $temp
+    }
+    if (Test-RemoteShellFailed $pushed) {
+        Write-InstallerLog "import" 1 "E_IMPORT_FAILED"
+        return @{ Key = "E_IMPORT_FAILED"; Stdout = $stdout }
+    }
+    # One shell argument. Single quotes on both paths. Exit code 0 is not
+    # enough: adb shell can print "mv:" and still exit 0.
+    $mvCommand = "mv '" + $part + "' '" + $remote + "'"
+    $moved = Invoke-Adb -ArgumentList @("-s", $serial, "shell", $mvCommand)
+    if (Test-RemoteShellFailed $moved) {
+        Write-InstallerLog "import" 1 "E_IMPORT_FAILED"
+        return @{ Key = "E_IMPORT_FAILED"; Stdout = $stdout }
+    }
     $finalThere = Test-RemoteFilePresent -Serial $serial -RemotePath $remote
     $partThere = Test-RemoteFilePresent -Serial $serial -RemotePath $part
     if ($partThere -or -not $finalThere) {
@@ -641,25 +674,14 @@ function Send-SetupOverAdb {
     }
     $component = $script:PackageId + "/" + $script:LauncherActivity
     [void](Invoke-Adb -ArgumentList @("-s", $serial, "shell", "am", "start", "-n", $component))
-    # Wall-clock budget, not a fixed call count. A slow adb still returns the error.
+    # The headset deletes the file after launch. 40 tries, 250 ms apart.
     $consumed = $false
-    $deadline = [DateTime]::UtcNow.AddSeconds(5)
-    while ($true) {
-        $finalThere = Test-RemoteFilePresent -Serial $serial -RemotePath $remote
-        $partThere = Test-RemoteFilePresent -Serial $serial -RemotePath $part
-        if ($partThere) {
-            Write-InstallerLog "import" 1 "E_IMPORT_FAILED"
-            return @{ Key = "E_IMPORT_FAILED"; Stdout = $stdout }
-        }
-        if (-not $finalThere) {
+    for ($try = 0; $try -lt 40; $try++) {
+        if (-not (Test-RemoteFilePresent -Serial $serial -RemotePath $remote)) {
             $consumed = $true
             break
         }
-        $remain = ($deadline - [DateTime]::UtcNow).TotalMilliseconds
-        if ($remain -le 50) { break }
-        $nap = 250
-        if ($remain -lt $nap) { $nap = [int]$remain }
-        if ($nap -gt 0) { Start-Sleep -Milliseconds $nap }
+        Start-Sleep -Milliseconds 250
     }
     if ($consumed) {
         Write-InstallerLog "import" 0 ""

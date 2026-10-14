@@ -561,12 +561,17 @@ Write-Trace "after i3"
 
 $shortJson = '{"webhookUrl":"https://example.com/hook","webhookKey":"0123456789abcdef","relayUrl":"https://example.com/relay","relayReadKey":"' + $readKey + '"}'
 $launcher = "io.github.eyegrok.ping/com.unity3d.player.UnityPlayerActivity"
+$partRemote = "/sdcard/Android/data/io.github.eyegrok.ping/files/eyegrok-setup.json.part"
+$finalRemote = "/sdcard/Android/data/io.github.eyegrok.ping/files/eyegrok-setup.json"
+$mvLine = "shell mv '" + $partRemote + "' '" + $finalRemote + "'"
 $sliceCases = @(
-    @{ Id = "AT-B1"; Name = "happy"; Stdin = $usbJson; Ok = $true; NeedImport = $true },
-    @{ Id = "AT-B2"; Name = "partleft"; Stdin = $usbJson; Ok = $false; Key = "E_IMPORT_FAILED"; Text = "was not renamed" },
-    @{ Id = "AT-B3"; Name = "notconsumed"; Stdin = $usbJson; Ok = $false; Key = "E_IMPORT"; Text = "did not take the setup" },
-    @{ Id = "AT-B4"; Name = "happy"; Stdin = $usbJson; Ok = $true; NeedAm = $true },
-    @{ Id = "AT-B5"; Name = "happy"; Stdin = $shortJson; Ok = $false; Key = "BAD values"; Text = "The webhook key must be at least 32 characters." }
+    @{ Id = "AT-B1"; Name = "happy"; Stdin = $usbJson; Ok = $true; NeedImport = $true; NeedMv = $true },
+    @{ Id = "AT-B2"; Name = "partleft"; Stdin = $usbJson; Ok = $false; Key = "E_IMPORT_FAILED"; Text = "was not renamed"; NeedMv = $true; NeedLs = $true; NoAm = $true },
+    @{ Id = "AT-B3"; Name = "notconsumed"; Stdin = $usbJson; Ok = $false; Key = "E_IMPORT"; Text = "did not take the setup"; NeedMv = $true; NeedLs = $true; NeedAm = $true },
+    @{ Id = "AT-B4"; Name = "happy"; Stdin = $usbJson; Ok = $true; NeedAm = $true; NeedMv = $true },
+    @{ Id = "AT-B5"; Name = "happy"; Stdin = $shortJson; Ok = $false; Key = "BAD values"; Text = "The webhook key must be at least 32 characters." },
+    @{ Id = "AT-B6"; Name = "mvfail"; Stdin = $usbJson; Ok = $false; Key = "E_IMPORT_FAILED"; Text = "was not renamed"; NeedMv = $true; NoLs = $true; NoAm = $true },
+    @{ Id = "AT-B7"; Name = "mvzero"; Stdin = $usbJson; Ok = $false; Key = "E_IMPORT_FAILED"; Text = "was not renamed"; NeedMv = $true; NoLs = $true; NoAm = $true }
 )
 foreach ($case in $sliceCases) {
     $caseHome = New-WorkHome $case.Id
@@ -593,6 +598,47 @@ foreach ($case in $sliceCases) {
         if ($case.NeedAm) {
             if ($calls.IndexOf("am start -n " + $launcher) -lt 0) { throw "am start" }
             if ($calls.ToLowerInvariant().IndexOf("monkey") -ge 0) { throw "monkey" }
+        }
+        if ($case.NeedMv) {
+            if ($calls.IndexOf("MV_SINGLE") -lt 0) { throw "mv single" }
+            if ($calls.IndexOf($mvLine) -lt 0) { throw "mv" }
+            if ($calls.IndexOf("cat >") -ge 0) { throw "exec-in cat" }
+            if ($calls.IndexOf("exec-in") -ge 0) { throw "exec-in" }
+            if ($calls.IndexOf("&&") -ge 0) { throw "chained mv" }
+            $mvAt = $calls.IndexOf($mvLine)
+            $partWriteAt = $calls.IndexOf(" push ")
+            if ($partWriteAt -lt 0) { throw "part write" }
+            $pushLineEnd = $calls.IndexOf("`n", $partWriteAt)
+            if ($pushLineEnd -lt 0) { $pushLineEnd = $calls.Length }
+            $pushLine = $calls.Substring($partWriteAt, $pushLineEnd - $partWriteAt)
+            if ($pushLine.IndexOf($partRemote) -lt 0) { throw "part write" }
+            if ($mvAt -le $partWriteAt) { throw "write before mv" }
+        }
+        $tmpDir = Join-Path $caseHome "tmp"
+        if (Test-Path -LiteralPath $tmpDir) {
+            $left = @(Get-ChildItem -LiteralPath $tmpDir -Force -ErrorAction SilentlyContinue)
+            if ($left.Count -gt 0) { throw "temp file" }
+        }
+        $sawPartLs = $false
+        $sawFinalLs = $false
+        foreach ($callLine in ($calls -split "`n")) {
+            if ($callLine.Contains("shell ls ") -and $callLine.Contains($partRemote)) { $sawPartLs = $true }
+            elseif ($callLine.Contains("shell ls ") -and $callLine.Contains($finalRemote)) { $sawFinalLs = $true }
+        }
+        if ($case.NeedLs) {
+            if (-not $sawFinalLs) { throw "ls final" }
+            if (-not $sawPartLs) { throw "ls part" }
+        }
+        if ($case.NoLs) {
+            if ($sawFinalLs -or $sawPartLs) { throw "ls" }
+        }
+        if ($case.NoAm) {
+            if ($calls.IndexOf("am start") -ge 0) { throw "am start" }
+        }
+        if ($case.NeedMv -and $case.NeedAm) {
+            $mvAt = $calls.IndexOf($mvLine)
+            $amAt = $calls.IndexOf("am start")
+            if ($mvAt -lt 0 -or $amAt -lt 0 -or $amAt -le $mvAt) { throw "mv before am" }
         }
         [void]$notes.Add($case.Id + " PASS")
     } catch {
